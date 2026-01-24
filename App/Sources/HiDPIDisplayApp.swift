@@ -6,19 +6,22 @@ import SwiftUI
 import AppKit
 import CoreGraphics
 
-// Debug logging
 func debugLog(_ message: String) {
+    #if DEBUG
     let logFile = "/tmp/hidpi_debug.log"
     let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
     let entry = "[\(timestamp)] \(message)\n"
-    if let handle = FileHandle(forWritingAtPath: logFile) {
-        handle.seekToEndOfFile()
-        handle.write(entry.data(using: .utf8)!)
-        handle.closeFile()
-    } else {
-        FileManager.default.createFile(atPath: logFile, contents: entry.data(using: .utf8), attributes: nil)
+    if let data = entry.data(using: .utf8) {
+        if let handle = FileHandle(forWritingAtPath: logFile) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            FileManager.default.createFile(atPath: logFile, contents: data, attributes: nil)
+        }
     }
     NSLog("HiDPI: %@", message)
+    #endif
 }
 
 @main
@@ -34,14 +37,10 @@ struct HiDPIDisplayApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
-    var cliProcess: Process?
     var currentPresetName = ""
     var isActive = false
-
-    // Path to bundled CLI tool
-    var cliPath: String {
-        Bundle.main.bundlePath + "/Contents/Resources/hidpi-cli"
-    }
+    var currentVirtualID: CGDirectDisplayID = 0
+    var pendingTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("App launched")
@@ -96,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Status header
         if isActive {
-            let statusItem = NSMenuItem(title: "✓ Active: \(currentPresetName)", action: nil, keyEquivalent: "")
+            let statusItem = NSMenuItem(title: "Active: \(currentPresetName)", action: nil, keyEquivalent: "")
             statusItem.isEnabled = false
             menu.addItem(statusItem)
             menu.addItem(NSMenuItem.separator())
@@ -114,10 +113,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Samsung G9 57" presets
         let g9Menu = NSMenu()
-        addPresetItem(to: g9Menu, preset: "g9-native-hidpi", title: "Native 2x (3840×1080)", subtitle: "Largest UI")
-        addPresetItem(to: g9Menu, preset: "g9-5120x1440", title: "5120×1440 HiDPI ★", subtitle: "Recommended")
-        addPresetItem(to: g9Menu, preset: "g9-4800x1350", title: "4800×1350 HiDPI", subtitle: "Slightly larger")
-        addPresetItem(to: g9Menu, preset: "g9-4480x1260", title: "4480×1260 HiDPI", subtitle: "Larger UI")
+        addPresetItem(to: g9Menu, preset: "g9-native-hidpi", title: "Native 2x (3840×1080)")
+        addPresetItem(to: g9Menu, preset: "g9-5120x1440", title: "5120×1440 HiDPI (Recommended)")
+        addPresetItem(to: g9Menu, preset: "g9-4800x1350", title: "4800×1350 HiDPI")
+        addPresetItem(to: g9Menu, preset: "g9-4480x1260", title: "4480×1260 HiDPI")
 
         let g9Item = NSMenuItem(title: "Samsung G9 57\"", action: nil, keyEquivalent: "")
         g9Item.submenu = g9Menu
@@ -125,8 +124,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Samsung G9 49" presets
         let g49Menu = NSMenu()
-        addPresetItem(to: g49Menu, preset: "g9-49-3840x1080", title: "3840×1080 HiDPI ★", subtitle: "Recommended")
-        addPresetItem(to: g49Menu, preset: "g9-49-native", title: "Native 2x (2560×720)", subtitle: "Largest UI")
+        addPresetItem(to: g49Menu, preset: "g9-49-3840x1080", title: "3840×1080 HiDPI (Recommended)")
+        addPresetItem(to: g49Menu, preset: "g9-49-native", title: "Native 2x (2560×720)")
 
         let g49Item = NSMenuItem(title: "Samsung G9 49\"", action: nil, keyEquivalent: "")
         g49Item.submenu = g49Menu
@@ -134,7 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 34" Ultrawide presets
         let uwMenu = NSMenu()
-        addPresetItem(to: uwMenu, preset: "uw34-2560x1080", title: "2560×1080 HiDPI ★", subtitle: "Recommended")
+        addPresetItem(to: uwMenu, preset: "uw34-2560x1080", title: "2560×1080 HiDPI (Recommended)")
 
         let uwItem = NSMenuItem(title: "34\" Ultrawide", action: nil, keyEquivalent: "")
         uwItem.submenu = uwMenu
@@ -142,8 +141,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 4K presets
         let k4Menu = NSMenu()
-        addPresetItem(to: k4Menu, preset: "4k-2560x1440", title: "2560×1440 HiDPI ★", subtitle: "Recommended")
-        addPresetItem(to: k4Menu, preset: "4k-native", title: "Native 2x (1920×1080)", subtitle: "Largest UI")
+        addPresetItem(to: k4Menu, preset: "4k-2560x1440", title: "2560×1440 HiDPI (Recommended)")
+        addPresetItem(to: k4Menu, preset: "4k-native", title: "Native 2x (1920×1080)")
 
         let k4Item = NSMenuItem(title: "4K Displays", action: nil, keyEquivalent: "")
         k4Item.submenu = k4Menu
@@ -158,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
-    func addPresetItem(to menu: NSMenu, preset: String, title: String, subtitle: String) {
+    func addPresetItem(to menu: NSMenu, preset: String, title: String) {
         let item = NSMenuItem(title: title, action: #selector(applyPreset(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = preset
@@ -194,30 +193,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let manager = VirtualDisplayManager.shared()
 
-        // Stop mirroring on the G9
-        debugLog("Stopping mirror for G9 (display 4)")
-        _ = manager.stopMirroring(forDisplay: 4)
-        debugLog("Mirror stop completed")
+        // Stop mirroring on any external display
+        if let externalID = findExternalDisplay() {
+            debugLog("Stopping mirror for display \(externalID)")
+            _ = manager.stopMirroring(forDisplay: externalID)
+        }
 
-        // Destroy all virtual displays
-        debugLog("Destroying all virtual displays")
         manager.destroyAllVirtualDisplays()
-        debugLog("Destroy completed")
 
         currentVirtualID = 0
         isActive = false
         currentPresetName = ""
-        debugLog("HiDPI disabled sync complete")
     }
-
-    var currentVirtualID: CGDirectDisplayID = 0
 
     func createVirtualDisplayAsync(config: PresetConfig) {
         debugLog("Creating virtual display: \(config.width)x\(config.height)")
 
-        // Always use display 4 (the G9) as the external display
-        let externalID: CGDirectDisplayID = 4
-        debugLog("Using G9 as external display: \(externalID)")
+        guard let externalID = findExternalDisplay() else {
+            debugLog("ERROR: No external display found")
+            rebuildMenu()
+            return
+        }
+        debugLog("Using external display: \(externalID)")
 
         // Create virtual display on main thread
         let manager = VirtualDisplayManager.shared()
@@ -301,8 +298,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         return nil
     }
-
-    var pendingTimer: Timer?
 
     @objc func disableHiDPIAction() {
         pendingTimer?.invalidate()
