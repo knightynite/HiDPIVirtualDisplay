@@ -1,165 +1,122 @@
 # G9 Helper
 
-A macOS menu bar app that enables HiDPI (Retina) scaling on Samsung G9 and other external monitors.
-
-Made with love by AL in Dallas
+A lightweight macOS menu bar utility that unlocks crisp HiDPI (Retina) scaling on Samsung Odyssey G9 and other large monitors.
 
 ## The Problem
 
-macOS only enables crisp HiDPI rendering on displays meeting certain pixel density requirements. Large monitors like the Samsung Odyssey G9 57" (7680x2160) don't qualify, leaving you with:
-- **Tiny text** at native resolution, or
-- **Blurry text** with macOS scaling
+macOS only enables HiDPI rendering on displays meeting certain pixel density thresholds. Large monitors like the Samsung Odyssey G9 (57" or 49") don't qualify, forcing you to choose between:
+
+- **Native resolution** with text too small to read comfortably
+- **Scaled resolution** with blurry, non-Retina rendering
 
 ## The Solution
 
-G9 Helper creates a virtual display with HiDPI enabled, then mirrors it to your physical monitor. macOS renders everything at 2x resolution, giving you crisp, Retina-quality text on any display.
+G9 Helper creates a virtual display with HiDPI enabled at your preferred resolution, then mirrors it to your monitor. macOS renders everything at 2x into the virtual framebuffer, giving you sharp, Retina-quality text on any display.
 
 ## Supported Monitors
 
-| Monitor | Native Resolution | Recommended HiDPI |
-|---------|------------------|-------------------|
-| Samsung G9 57" | 7680x2160 | 5120x1440 |
-| Samsung G9 49" | 5120x1440 | 3840x1080 |
-| 34" Ultrawide | 3440x1440 | 2560x1080 |
-| 4K Displays | 3840x2160 | 2560x1440 |
+| Monitor | Native Resolution | Recommended Setting |
+|---------|------------------|---------------------|
+| Samsung Odyssey G9 57" | 7680x2160 | 5120x1440 HiDPI |
+| Samsung Odyssey G9 49" | 5120x1440 | 3840x1080 HiDPI |
+| 34" Ultrawide | 3440x1440 | 2560x1080 HiDPI |
+| 4K Displays | 3840x2160 | 2560x1440 HiDPI |
 
 ## Installation
 
-### From DMG (Recommended)
+### Download
 
-1. Download the latest DMG from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
-2. Open the DMG file
-3. Drag **G9 Helper.app** to the **Applications** folder
-4. Launch G9 Helper from Applications or Spotlight
-5. Look for the display icon in your menu bar
+1. Grab the latest `G9.Helper.dmg` from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
+2. Open the DMG and drag **G9 Helper** to **Applications**
+3. Launch from Applications or Spotlight
+4. Look for the display icon in your menu bar
 
-### From Source
+### Build from Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/knightynite/HiDPIVirtualDisplay.git
 cd HiDPIVirtualDisplay/App
-
-# Build the app
 ./build.sh
-
-# Install to Applications
 cp -r "build/G9 Helper.app" /Applications/
 ```
 
 ### First Launch
 
-On first launch, macOS may show a security warning. To open the app:
-1. Right-click (or Control-click) on G9 Helper in Applications
-2. Select "Open" from the context menu
-3. Click "Open" in the dialog
-
-## Uninstallation
-
-1. Click the G9 Helper icon in the menu bar
-2. Select **Quit** to close the app
-3. Open **Applications** folder in Finder
-4. Drag **G9 Helper.app** to Trash
-5. Empty Trash
+macOS may block the app on first run. Right-click the app, select "Open", then click "Open" in the dialog.
 
 ## Usage
 
-1. Launch G9 Helper - a display icon appears in your menu bar
-2. Click the icon to see available presets
-3. Select your monitor type (Samsung G9 57", G9 49", etc.)
-4. Choose a resolution preset
-5. Wait a few seconds for the display to configure
+1. Click the display icon in your menu bar
+2. Select your monitor type from the submenu
+3. Choose a resolution preset
+4. Wait a few seconds for the configuration to apply
 
-To disable HiDPI, click the menu bar icon and select **Disable HiDPI**.
+To disable, click the menu bar icon and select **Disable HiDPI**.
 
-## Requirements
-
-- macOS 12.0 (Monterey) or later
-- Apple Silicon recommended (M1/M2/M3/M4)
-  - Base chips: Max 6144px horizontal HiDPI
-  - Pro/Max/Ultra: Max 7680px+ horizontal HiDPI
-- Intel Macs may work with limitations
-
-## How It Works
-
-1. Creates a virtual display using private macOS APIs
-2. Configures HiDPI mode with a 2x framebuffer
-3. Mirrors the virtual display to your physical monitor
-4. macOS renders at 2x, then scales to your display's native resolution
-
-## Presets
+## Resolution Presets
 
 ### Samsung G9 57" (7680x2160)
 
-| Preset | Looks Like | Notes |
-|--------|-----------|-------|
-| Native 2x | 3840x1080 | Largest UI, sharpest |
-| 5120x1440 | 5120x1440 | Recommended |
-| 4800x1350 | 4800x1350 | Balanced |
-| 4480x1260 | 4480x1260 | Larger UI |
+| Preset | Effective Resolution | Notes |
+|--------|---------------------|-------|
+| Native 2x | 3840x1080 | Largest UI, sharpest text |
+| 5120x1440 | 5120x1440 | Best balance (recommended) |
+| 4800x1350 | 4800x1350 | Slightly larger UI |
+| 4480x1260 | 4480x1260 | Larger UI elements |
 
 ### Samsung G9 49" (5120x1440)
 
-| Preset | Looks Like |
-|--------|-----------|
-| 3840x1080 | Recommended |
+| Preset | Effective Resolution |
+|--------|---------------------|
+| 3840x1080 | 3840x1080 (recommended) |
 | Native 2x | 2560x720 |
+
+## Requirements
+
+- macOS 12.0 Monterey or later
+- Apple Silicon recommended (M1/M2/M3/M4)
+  - Base chips support up to 6144px horizontal
+  - Pro/Max/Ultra support 7680px+ horizontal
+- Intel Macs may work with limitations
 
 ## Limitations
 
-- Refresh rate limited to 60Hz in mirrored mode
-- HDR may not work in mirrored mode
-- May need to re-enable after sleep/wake
-- Uses private APIs that could break with macOS updates
+- Refresh rate limited to 60Hz when mirrored
+- HDR may not function in mirrored mode
+- May require re-enabling after sleep/wake cycles
+- Uses private macOS APIs (may break with future updates)
+
+## Uninstall
+
+1. Click the G9 Helper menu bar icon and select **Quit**
+2. Drag **G9 Helper.app** from Applications to Trash
+3. Empty Trash
 
 ## Troubleshooting
 
-### App won't open
-Right-click the app and select "Open", then click "Open" in the security dialog.
+**App won't open**: Right-click and select "Open", then confirm in the security dialog.
 
-### Resolution doesn't change
-1. Click "Disable HiDPI" first
-2. Wait a few seconds
-3. Try selecting the preset again
+**Resolution doesn't apply**: Disable HiDPI first, wait a few seconds, then try again.
 
-### Display configuration changed and app stopped working
-The app resets display configuration on launch. Quit and relaunch the app.
+**Display issues after changing monitor settings**: Quit and relaunch the app.
 
-### Virtual display persists after quit
-Restart your Mac to clear orphaned virtual displays.
+**Virtual display persists after quit**: Restart your Mac to clear orphaned displays.
 
-## Building from Source
+## How It Works
 
-### Requirements
-- Xcode Command Line Tools: `xcode-select --install`
-- macOS 12.0+ SDK
+The app leverages macOS private APIs to create virtual displays with custom properties:
 
-### Build Commands
-
-```bash
-# Build the app
-cd App && ./build.sh
-
-# Create distributable DMG
-./create-dmg.sh
-```
-
-## Technical Details
-
-Uses private CoreGraphics APIs:
-- `CGVirtualDisplay` - Creates virtual displays
-- `CGVirtualDisplayDescriptor` - Display properties
-- `CGVirtualDisplaySettings` - HiDPI configuration
-
-Public APIs:
-- `CGConfigureDisplayMirrorOfDisplay` - Display mirroring
+1. Creates a virtual display with HiDPI flag and 2x framebuffer
+2. Configures display mirroring from virtual to physical display
+3. macOS renders at 2x resolution into the virtual framebuffer
+4. The framebuffer is scaled to your monitor's native resolution
 
 ## License
 
-MIT License - Use at your own risk.
+MIT License. Use at your own risk.
 
-This tool uses undocumented macOS APIs that may break with future updates.
+This software uses undocumented macOS APIs that may change or break with future updates.
 
 ---
 
-Made with love by AL in Dallas
+Created by AL in Dallas

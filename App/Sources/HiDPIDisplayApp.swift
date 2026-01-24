@@ -1,6 +1,6 @@
 // G9 Helper
-// A menu bar app for HiDPI scaling on Samsung G9 and other monitors
-// Made with love by AL in Dallas
+// HiDPI scaling utility for Samsung Odyssey G9 and large monitors
+// Created by AL in Dallas
 
 import SwiftUI
 import AppKit
@@ -257,7 +257,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
-        alert.informativeText = "Version 1.0.0\n\nEnables HiDPI (Retina) scaling on Samsung G9 and other monitors.\n\nMade with love by AL in Dallas"
+        alert.informativeText = "Version 1.0.0\n\nUnlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.\n\nCreated by AL in Dallas"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()

@@ -27,23 +27,33 @@ ln -s /Applications "${DMG_DIR}/Applications"
 # Create README
 cat > "${DMG_DIR}/README.txt" << 'EOF'
 G9 Helper v1.0.0
-Made with love by AL in Dallas
 
-Installation:
+Unlock crisp HiDPI (Retina) scaling on Samsung Odyssey G9
+and other large monitors.
+
+INSTALLATION
 1. Drag "G9 Helper.app" to the Applications folder
 2. Launch from Applications or Spotlight
 3. Look for the display icon in your menu bar
 
-Uninstallation:
-1. Quit G9 Helper from the menu bar (click icon > Quit)
-2. Drag "G9 Helper.app" from Applications to Trash
-3. Empty Trash
+FIRST LAUNCH
+macOS may block the app. Right-click and select "Open",
+then click "Open" in the dialog.
 
-For more information, visit:
-https://github.com/knightynite/HiDPIVirtualDisplay
+USAGE
+1. Click the display icon in your menu bar
+2. Select your monitor type
+3. Choose a resolution preset
+4. Wait a few seconds for configuration
 
-Note: This app uses private macOS APIs. If you encounter
-issues, try right-clicking the app and selecting "Open".
+UNINSTALL
+1. Click the menu bar icon and select "Quit"
+2. Drag the app from Applications to Trash
+
+More info: https://github.com/knightynite/HiDPIVirtualDisplay
+
+---
+Created by AL in Dallas
 EOF
 
 # Create the DMG
