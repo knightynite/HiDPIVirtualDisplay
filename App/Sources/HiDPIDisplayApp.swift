@@ -7,21 +7,7 @@ import AppKit
 import CoreGraphics
 
 func debugLog(_ message: String) {
-    #if DEBUG
-    let logFile = "/tmp/hidpi_debug.log"
-    let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-    let entry = "[\(timestamp)] \(message)\n"
-    if let data = entry.data(using: .utf8) {
-        if let handle = FileHandle(forWritingAtPath: logFile) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            handle.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: logFile, contents: data, attributes: nil)
-        }
-    }
     NSLog("HiDPI: %@", message)
-    #endif
 }
 
 @main
@@ -55,11 +41,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "HiDPI Display")
         }
 
+        // Clean up any stale state from previous sessions
+        cleanupStaleState()
+
         // Check for existing virtual display
         checkCurrentState()
 
         // Build menu
         rebuildMenu()
+    }
+
+    func cleanupStaleState() {
+        debugLog("Cleaning up stale display state...")
+        let manager = VirtualDisplayManager.shared()
+
+        // Reset any existing mirroring that might be left over
+        manager.resetAllMirroring()
+
+        // Destroy any virtual displays from previous session
+        manager.destroyAllVirtualDisplays()
+
+        debugLog("Stale state cleanup complete")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -178,12 +180,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pendingTimer?.invalidate()
         pendingTimer = nil
 
-        // Disable existing setup
-        disableHiDPISync()
+        // First, completely reset display state
+        debugLog("Resetting display configuration...")
+        let manager = VirtualDisplayManager.shared()
+        manager.resetAllMirroring()
+        manager.destroyAllVirtualDisplays()
+        currentVirtualID = 0
+        isActive = false
+        currentPresetName = ""
 
         // Schedule creation after a delay to let system settle
-        debugLog("Scheduling display creation in 1 second...")
-        pendingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+        debugLog("Scheduling display creation in 1.5 seconds...")
+        pendingTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
             self?.createVirtualDisplayAsync(config: config)
         }
     }
@@ -193,17 +201,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let manager = VirtualDisplayManager.shared()
 
-        // Stop mirroring on any external display
-        if let externalID = findExternalDisplay() {
-            debugLog("Stopping mirror for display \(externalID)")
-            _ = manager.stopMirroring(forDisplay: externalID)
-        }
+        // Reset ALL mirroring to ensure clean state
+        manager.resetAllMirroring()
 
+        // Destroy our virtual display
         manager.destroyAllVirtualDisplays()
 
         currentVirtualID = 0
         isActive = false
         currentPresetName = ""
+
+        debugLog("HiDPI disabled")
     }
 
     func createVirtualDisplayAsync(config: PresetConfig) {
@@ -270,32 +278,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         debugLog("findExternalDisplay: found \(displayCount) displays, currentVirtualID=\(currentVirtualID)")
 
+        // Collect candidate displays with their physical sizes
+        var candidates: [(id: CGDirectDisplayID, size: CGSize)] = []
+
         for i in 0..<Int(displayCount) {
             let displayID = displayList[i]
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let isVirtual = displayID == currentVirtualID
+            let size = CGDisplayScreenSize(displayID)
 
-            debugLog("  Display \(displayID): builtin=\(isBuiltin), isOurVirtual=\(isVirtual)")
+            debugLog("  Display \(displayID): builtin=\(isBuiltin), isOurVirtual=\(isVirtual), size=\(size.width)x\(size.height)mm")
 
             // Skip builtin displays and our own virtual display
             if !isBuiltin && !isVirtual {
-                debugLog("  -> Selected as external")
-                return displayID
+                candidates.append((id: displayID, size: size))
             }
         }
 
-        // Fallback: find by checking physical size (virtual displays have fake sizes)
-        for i in 0..<Int(displayCount) {
-            let displayID = displayList[i]
-            if displayID == currentVirtualID { continue }
-            let size = CGDisplayScreenSize(displayID)
-            // G9 57" is about 1400mm wide
-            if size.width > 1000 && size.width < 1500 {
-                debugLog("  -> Selected by size: \(displayID) (\(size.width)mm)")
-                return displayID
-            }
+        // Prefer displays with large physical size (real monitors vs virtual)
+        // G9 57" is about 1400mm wide, G9 49" is about 1200mm wide
+        // Sort by width descending to prefer larger displays
+        candidates.sort { $0.size.width > $1.size.width }
+
+        if let best = candidates.first {
+            debugLog("  -> Selected external display: \(best.id) (\(best.size.width)mm wide)")
+            return best.id
         }
 
+        debugLog("  -> No external display found")
         return nil
     }
 
