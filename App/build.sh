@@ -38,6 +38,12 @@ swiftc \
 # Copy Info.plist
 cp Info.plist "${CONTENTS}/"
 
+# Copy app icon if it exists
+if [ -f "Resources/AppIcon.icns" ]; then
+    cp Resources/AppIcon.icns "${RESOURCES}/"
+    echo "App icon copied"
+fi
+
 # Sign the app with entitlements
 echo "Signing..."
 codesign --force --sign - --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}" || true
