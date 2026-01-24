@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+*.app
+*.dmg
+*.dSYM/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Temporary files
+*.swp
+*.swo
+*~
+\#*\#
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
