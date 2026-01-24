@@ -6,6 +6,21 @@ import SwiftUI
 import AppKit
 import CoreGraphics
 
+// Debug logging
+func debugLog(_ message: String) {
+    let logFile = "/tmp/hidpi_debug.log"
+    let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+    let entry = "[\(timestamp)] \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: logFile) {
+        handle.seekToEndOfFile()
+        handle.write(entry.data(using: .utf8)!)
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: logFile, contents: entry.data(using: .utf8), attributes: nil)
+    }
+    NSLog("HiDPI: %@", message)
+}
+
 @main
 struct HiDPIDisplayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -17,17 +32,20 @@ struct HiDPIDisplayApp: App {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
-    var displayManager = VirtualDisplayManager.shared()
-    var currentVirtualDisplayID: CGDirectDisplayID = 0
-    var popover = NSPopover()
+    var cliProcess: Process?
+    var currentPresetName = ""
+    var isActive = false
 
-    @Published var isActive = false
-    @Published var currentPresetName = ""
-    @Published var currentResolution = ""
+    // Path to bundled CLI tool
+    var cliPath: String {
+        Bundle.main.bundlePath + "/Contents/Resources/hidpi-cli"
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        debugLog("App launched")
+
         // Hide dock icon
         NSApp.setActivationPolicy(.accessory)
 
@@ -36,587 +54,297 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "HiDPI Display")
-            button.action = #selector(togglePopover)
-            button.target = self
         }
 
-        // Setup popover
-        popover.contentSize = NSSize(width: 340, height: 520)
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: MenuContentView(appDelegate: self))
+        // Check for existing virtual display
+        checkCurrentState()
+
+        // Build menu
+        rebuildMenu()
     }
 
-    @objc func togglePopover() {
-        if let button = statusItem?.button {
-            if popover.isShown {
-                popover.performClose(nil)
-            } else {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
+    func applicationWillTerminate(_ notification: Notification) {
+        pendingTimer?.invalidate()
+        disableHiDPISync()
     }
 
-    func createVirtualDisplay(preset: DisplayPreset) {
-        print("Creating virtual display: \(preset.displayName)")
-        print("  Framebuffer: \(preset.framebufferWidth)x\(preset.framebufferHeight)")
-        print("  Logical: \(preset.logicalWidth)x\(preset.logicalHeight)")
+    func checkCurrentState() {
+        // Check if there's an active mirror setup
+        var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayList, &displayCount)
 
-        // Destroy existing virtual display first
-        if currentVirtualDisplayID != 0 {
-            destroyVirtualDisplay()
-        }
-
-        currentVirtualDisplayID = displayManager.createVirtualDisplay(
-            withWidth: preset.framebufferWidth,
-            height: preset.framebufferHeight,
-            ppi: preset.ppi,
-            hiDPI: preset.isHiDPI,
-            name: preset.name,
-            refreshRate: preset.refreshRate
-        )
-
-        print("  Created display ID: \(currentVirtualDisplayID)")
-
-        if currentVirtualDisplayID != 0 {
-            // Find the external display and mirror
-            if let externalDisplayID = findExternalDisplay() {
-                print("  Mirroring to display: \(externalDisplayID)")
-                let success = displayManager.mirrorDisplay(currentVirtualDisplayID, toDisplay: externalDisplayID)
-                print("  Mirror success: \(success)")
-
-                if success {
-                    DispatchQueue.main.async {
-                        self.isActive = true
-                        self.currentPresetName = preset.displayName
-                        self.currentResolution = preset.resolutionString
-                    }
+        for i in 0..<Int(displayCount) {
+            let displayID = displayList[i]
+            let mirrorOf = CGDisplayMirrorsDisplay(displayID)
+            if mirrorOf != kCGNullDirectDisplay {
+                // Found a display that's mirroring something
+                if let mode = CGDisplayCopyDisplayMode(mirrorOf) {
+                    let width = mode.width
+                    let height = mode.height
+                    currentPresetName = "\(width)x\(height)"
+                    isActive = true
+                    debugLog("Found existing mirror: \(displayID) mirrors \(mirrorOf) at \(width)x\(height)")
                 }
-            } else {
-                print("  No external display found!")
+                break
             }
-        } else {
-            print("  Failed to create virtual display!")
         }
     }
 
-    func destroyVirtualDisplay() {
-        print("Destroying virtual display: \(currentVirtualDisplayID)")
+    func rebuildMenu() {
+        let menu = NSMenu()
 
-        if currentVirtualDisplayID != 0 {
-            // Stop mirroring first
-            if let externalDisplayID = findExternalDisplay() {
-                displayManager.stopMirroring(forDisplay: externalDisplayID)
-            }
-            displayManager.destroyVirtualDisplay(currentVirtualDisplayID)
-            currentVirtualDisplayID = 0
+        // Status header
+        if isActive {
+            let statusItem = NSMenuItem(title: "✓ Active: \(currentPresetName)", action: nil, keyEquivalent: "")
+            statusItem.isEnabled = false
+            menu.addItem(statusItem)
+            menu.addItem(NSMenuItem.separator())
 
-            DispatchQueue.main.async {
-                self.isActive = false
-                self.currentPresetName = ""
-                self.currentResolution = ""
-            }
+            let disableItem = NSMenuItem(title: "Disable HiDPI", action: #selector(disableHiDPIAction), keyEquivalent: "")
+            disableItem.target = self
+            menu.addItem(disableItem)
+            menu.addItem(NSMenuItem.separator())
+        } else {
+            let statusItem = NSMenuItem(title: "No HiDPI active", action: nil, keyEquivalent: "")
+            statusItem.isEnabled = false
+            menu.addItem(statusItem)
+            menu.addItem(NSMenuItem.separator())
         }
+
+        // Samsung G9 57" presets
+        let g9Menu = NSMenu()
+        addPresetItem(to: g9Menu, preset: "g9-native-hidpi", title: "Native 2x (3840×1080)", subtitle: "Largest UI")
+        addPresetItem(to: g9Menu, preset: "g9-5120x1440", title: "5120×1440 HiDPI ★", subtitle: "Recommended")
+        addPresetItem(to: g9Menu, preset: "g9-4800x1350", title: "4800×1350 HiDPI", subtitle: "Slightly larger")
+        addPresetItem(to: g9Menu, preset: "g9-4480x1260", title: "4480×1260 HiDPI", subtitle: "Larger UI")
+
+        let g9Item = NSMenuItem(title: "Samsung G9 57\"", action: nil, keyEquivalent: "")
+        g9Item.submenu = g9Menu
+        menu.addItem(g9Item)
+
+        // Samsung G9 49" presets
+        let g49Menu = NSMenu()
+        addPresetItem(to: g49Menu, preset: "g9-49-3840x1080", title: "3840×1080 HiDPI ★", subtitle: "Recommended")
+        addPresetItem(to: g49Menu, preset: "g9-49-native", title: "Native 2x (2560×720)", subtitle: "Largest UI")
+
+        let g49Item = NSMenuItem(title: "Samsung G9 49\"", action: nil, keyEquivalent: "")
+        g49Item.submenu = g49Menu
+        menu.addItem(g49Item)
+
+        // 34" Ultrawide presets
+        let uwMenu = NSMenu()
+        addPresetItem(to: uwMenu, preset: "uw34-2560x1080", title: "2560×1080 HiDPI ★", subtitle: "Recommended")
+
+        let uwItem = NSMenuItem(title: "34\" Ultrawide", action: nil, keyEquivalent: "")
+        uwItem.submenu = uwMenu
+        menu.addItem(uwItem)
+
+        // 4K presets
+        let k4Menu = NSMenu()
+        addPresetItem(to: k4Menu, preset: "4k-2560x1440", title: "2560×1440 HiDPI ★", subtitle: "Recommended")
+        addPresetItem(to: k4Menu, preset: "4k-native", title: "Native 2x (1920×1080)", subtitle: "Largest UI")
+
+        let k4Item = NSMenuItem(title: "4K Displays", action: nil, keyEquivalent: "")
+        k4Item.submenu = k4Menu
+        menu.addItem(k4Item)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        statusItem?.menu = menu
+    }
+
+    func addPresetItem(to menu: NSMenu, preset: String, title: String, subtitle: String) {
+        let item = NSMenuItem(title: title, action: #selector(applyPreset(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = preset
+        menu.addItem(item)
+    }
+
+    @objc func applyPreset(_ sender: NSMenuItem) {
+        guard let presetName = sender.representedObject as? String else { return }
+        debugLog(">>> Applying preset: \(presetName)")
+
+        // Get preset config
+        guard let config = presetConfigs[presetName] else {
+            debugLog("ERROR: Unknown preset \(presetName)")
+            return
+        }
+
+        // Cancel any pending operations
+        pendingTimer?.invalidate()
+        pendingTimer = nil
+
+        // Disable existing setup
+        disableHiDPISync()
+
+        // Schedule creation after a delay to let system settle
+        debugLog("Scheduling display creation in 1 second...")
+        pendingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+            self?.createVirtualDisplayAsync(config: config)
+        }
+    }
+
+    func disableHiDPISync() {
+        debugLog("Disabling HiDPI sync - currentVirtualID: \(currentVirtualID)")
+
+        let manager = VirtualDisplayManager.shared()
+
+        // Stop mirroring on the G9
+        debugLog("Stopping mirror for G9 (display 4)")
+        _ = manager.stopMirroring(forDisplay: 4)
+        debugLog("Mirror stop completed")
+
+        // Destroy all virtual displays
+        debugLog("Destroying all virtual displays")
+        manager.destroyAllVirtualDisplays()
+        debugLog("Destroy completed")
+
+        currentVirtualID = 0
+        isActive = false
+        currentPresetName = ""
+        debugLog("HiDPI disabled sync complete")
+    }
+
+    var currentVirtualID: CGDirectDisplayID = 0
+
+    func createVirtualDisplayAsync(config: PresetConfig) {
+        debugLog("Creating virtual display: \(config.width)x\(config.height)")
+
+        // Always use display 4 (the G9) as the external display
+        let externalID: CGDirectDisplayID = 4
+        debugLog("Using G9 as external display: \(externalID)")
+
+        // Create virtual display on main thread
+        let manager = VirtualDisplayManager.shared()
+        debugLog("Calling createVirtualDisplay...")
+        let virtualID = manager.createVirtualDisplay(
+            withWidth: config.width,
+            height: config.height,
+            ppi: config.ppi,
+            hiDPI: config.hiDPI,
+            name: config.name,
+            refreshRate: 60.0
+        )
+        debugLog("createVirtualDisplay returned: \(virtualID)")
+
+        if virtualID == 0 || virtualID == UInt32.max {
+            debugLog("ERROR: Failed to create virtual display (returned \(virtualID))")
+            rebuildMenu()
+            return
+        }
+        debugLog("Created virtual display: \(virtualID)")
+        currentVirtualID = virtualID
+
+        // Wait for display to initialize using Timer (non-blocking)
+        debugLog("Scheduling mirror in 3 seconds...")
+        pendingTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+            self?.performMirror(virtualID: virtualID, externalID: externalID, config: config)
+        }
+    }
+
+    func performMirror(virtualID: CGDirectDisplayID, externalID: CGDirectDisplayID, config: PresetConfig) {
+        debugLog("Setting up mirror: \(virtualID) -> \(externalID)")
+        let manager = VirtualDisplayManager.shared()
+        let success = manager.mirrorDisplay(virtualID, toDisplay: externalID)
+        debugLog("Mirror result: \(success)")
+
+        if success {
+            isActive = true
+            currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
+        } else {
+            debugLog("Mirror failed, cleaning up...")
+            manager.destroyVirtualDisplay(virtualID)
+            currentVirtualID = 0
+            isActive = false
+            currentPresetName = ""
+        }
+        rebuildMenu()
     }
 
     func findExternalDisplay() -> CGDirectDisplayID? {
-        let displays = displayManager.listAllDisplays()
-        for display in displays {
-            guard let dict = display as? [String: Any],
-                  let displayID = dict["id"] as? UInt32,
-                  let isVirtual = dict["isVirtual"] as? Bool,
-                  !isVirtual else { continue }
+        var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayList, &displayCount)
 
-            // Return the first non-virtual external display
-            let isBuiltin = dict["isBuiltin"] as? Bool ?? false
-            if !isBuiltin {
-                return CGDirectDisplayID(displayID)
+        debugLog("findExternalDisplay: found \(displayCount) displays, currentVirtualID=\(currentVirtualID)")
+
+        for i in 0..<Int(displayCount) {
+            let displayID = displayList[i]
+            let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
+            let isVirtual = displayID == currentVirtualID
+
+            debugLog("  Display \(displayID): builtin=\(isBuiltin), isOurVirtual=\(isVirtual)")
+
+            // Skip builtin displays and our own virtual display
+            if !isBuiltin && !isVirtual {
+                debugLog("  -> Selected as external")
+                return displayID
             }
         }
+
+        // Fallback: find by checking physical size (virtual displays have fake sizes)
+        for i in 0..<Int(displayCount) {
+            let displayID = displayList[i]
+            if displayID == currentVirtualID { continue }
+            let size = CGDisplayScreenSize(displayID)
+            // G9 57" is about 1400mm wide
+            if size.width > 1000 && size.width < 1500 {
+                debugLog("  -> Selected by size: \(displayID) (\(size.width)mm)")
+                return displayID
+            }
+        }
+
         return nil
+    }
+
+    var pendingTimer: Timer?
+
+    @objc func disableHiDPIAction() {
+        pendingTimer?.invalidate()
+        pendingTimer = nil
+        disableHiDPISync()
+        rebuildMenu()
+    }
+
+    @objc func quitApp() {
+        pendingTimer?.invalidate()
+        disableHiDPISync()
+        NSApp.terminate(nil)
     }
 }
 
-// MARK: - Display Preset Model
+// MARK: - Preset Configurations
 
-struct DisplayPreset: Identifiable, Hashable {
-    let id = UUID()
+struct PresetConfig {
     let name: String
-    let displayName: String
-    let description: String
-    let framebufferWidth: UInt32
-    let framebufferHeight: UInt32
+    let width: UInt32      // Framebuffer width
+    let height: UInt32     // Framebuffer height
     let logicalWidth: UInt32
     let logicalHeight: UInt32
     let ppi: UInt32
-    let refreshRate: Double
-    let category: PresetCategory
-
-    var isHiDPI: Bool {
-        return framebufferWidth == logicalWidth * 2
-    }
-
-    var resolutionString: String {
-        return "\(logicalWidth)x\(logicalHeight)"
-    }
-
-    var framebufferString: String {
-        return "\(framebufferWidth)x\(framebufferHeight)"
-    }
+    let hiDPI: Bool
 }
 
-enum PresetCategory: String, CaseIterable {
-    case samsungG9_57 = "Samsung G9 57\""
-    case samsungG9_49 = "Samsung G9 49\""
-    case ultrawide_34 = "34\" Ultrawide"
-    case standard_4k = "4K Displays"
-    case custom = "Custom"
-}
-
-// MARK: - Preset Definitions
-
-let presets: [DisplayPreset] = [
+let presetConfigs: [String: PresetConfig] = [
     // Samsung G9 57" (7680x2160)
-    DisplayPreset(
-        name: "g9-57-native-hidpi",
-        displayName: "Native 2x HiDPI",
-        description: "Looks like 3840x1080 - Largest UI",
-        framebufferWidth: 7680,
-        framebufferHeight: 2160,
-        logicalWidth: 3840,
-        logicalHeight: 1080,
-        ppi: 140,
-        refreshRate: 60,
-        category: .samsungG9_57
-    ),
-    DisplayPreset(
-        name: "g9-57-5120x1440",
-        displayName: "5120x1440 HiDPI ★",
-        description: "Recommended - Best balance",
-        framebufferWidth: 10240,
-        framebufferHeight: 2880,
-        logicalWidth: 5120,
-        logicalHeight: 1440,
-        ppi: 140,
-        refreshRate: 60,
-        category: .samsungG9_57
-    ),
-    DisplayPreset(
-        name: "g9-57-4800x1350",
-        displayName: "4800x1350 HiDPI",
-        description: "Slightly larger UI",
-        framebufferWidth: 9600,
-        framebufferHeight: 2700,
-        logicalWidth: 4800,
-        logicalHeight: 1350,
-        ppi: 140,
-        refreshRate: 60,
-        category: .samsungG9_57
-    ),
-    DisplayPreset(
-        name: "g9-57-4480x1260",
-        displayName: "4480x1260 HiDPI",
-        description: "Larger UI elements",
-        framebufferWidth: 8960,
-        framebufferHeight: 2520,
-        logicalWidth: 4480,
-        logicalHeight: 1260,
-        ppi: 140,
-        refreshRate: 60,
-        category: .samsungG9_57
-    ),
-    DisplayPreset(
-        name: "g9-57-4096x1152",
-        displayName: "4096x1152 HiDPI",
-        description: "Even larger UI",
-        framebufferWidth: 8192,
-        framebufferHeight: 2304,
-        logicalWidth: 4096,
-        logicalHeight: 1152,
-        ppi: 140,
-        refreshRate: 60,
-        category: .samsungG9_57
-    ),
+    "g9-native-hidpi": PresetConfig(name: "G9-Native", width: 7680, height: 2160, logicalWidth: 3840, logicalHeight: 1080, ppi: 140, hiDPI: true),
+    "g9-5120x1440": PresetConfig(name: "G9-5120", width: 10240, height: 2880, logicalWidth: 5120, logicalHeight: 1440, ppi: 140, hiDPI: true),
+    "g9-4800x1350": PresetConfig(name: "G9-4800", width: 9600, height: 2700, logicalWidth: 4800, logicalHeight: 1350, ppi: 140, hiDPI: true),
+    "g9-4480x1260": PresetConfig(name: "G9-4480", width: 8960, height: 2520, logicalWidth: 4480, logicalHeight: 1260, ppi: 140, hiDPI: true),
 
     // Samsung G9 49" (5120x1440)
-    DisplayPreset(
-        name: "g9-49-native-hidpi",
-        displayName: "Native 2x HiDPI",
-        description: "Looks like 2560x720",
-        framebufferWidth: 5120,
-        framebufferHeight: 1440,
-        logicalWidth: 2560,
-        logicalHeight: 720,
-        ppi: 109,
-        refreshRate: 60,
-        category: .samsungG9_49
-    ),
-    DisplayPreset(
-        name: "g9-49-3840x1080",
-        displayName: "3840x1080 HiDPI ★",
-        description: "Recommended - More workspace",
-        framebufferWidth: 7680,
-        framebufferHeight: 2160,
-        logicalWidth: 3840,
-        logicalHeight: 1080,
-        ppi: 109,
-        refreshRate: 60,
-        category: .samsungG9_49
-    ),
-    DisplayPreset(
-        name: "g9-49-3440x960",
-        displayName: "3440x960 HiDPI",
-        description: "Balanced workspace",
-        framebufferWidth: 6880,
-        framebufferHeight: 1920,
-        logicalWidth: 3440,
-        logicalHeight: 960,
-        ppi: 109,
-        refreshRate: 60,
-        category: .samsungG9_49
-    ),
+    "g9-49-native": PresetConfig(name: "G9-49-Native", width: 5120, height: 1440, logicalWidth: 2560, logicalHeight: 720, ppi: 109, hiDPI: true),
+    "g9-49-3840x1080": PresetConfig(name: "G9-49-3840", width: 7680, height: 2160, logicalWidth: 3840, logicalHeight: 1080, ppi: 109, hiDPI: true),
 
-    // 34" Ultrawide (3440x1440)
-    DisplayPreset(
-        name: "uw34-native-hidpi",
-        displayName: "Native 2x HiDPI",
-        description: "Looks like 1720x720",
-        framebufferWidth: 3440,
-        framebufferHeight: 1440,
-        logicalWidth: 1720,
-        logicalHeight: 720,
-        ppi: 110,
-        refreshRate: 60,
-        category: .ultrawide_34
-    ),
-    DisplayPreset(
-        name: "uw34-2560x1080",
-        displayName: "2560x1080 HiDPI ★",
-        description: "Recommended - More workspace",
-        framebufferWidth: 5120,
-        framebufferHeight: 2160,
-        logicalWidth: 2560,
-        logicalHeight: 1080,
-        ppi: 110,
-        refreshRate: 60,
-        category: .ultrawide_34
-    ),
+    // 34" Ultrawide
+    "uw34-2560x1080": PresetConfig(name: "UW34-2560", width: 5120, height: 2160, logicalWidth: 2560, logicalHeight: 1080, ppi: 110, hiDPI: true),
 
-    // Standard 4K
-    DisplayPreset(
-        name: "4k-native-hidpi",
-        displayName: "Native 2x HiDPI",
-        description: "Looks like 1920x1080",
-        framebufferWidth: 3840,
-        framebufferHeight: 2160,
-        logicalWidth: 1920,
-        logicalHeight: 1080,
-        ppi: 163,
-        refreshRate: 60,
-        category: .standard_4k
-    ),
-    DisplayPreset(
-        name: "4k-2560x1440",
-        displayName: "2560x1440 HiDPI ★",
-        description: "Recommended - More workspace",
-        framebufferWidth: 5120,
-        framebufferHeight: 2880,
-        logicalWidth: 2560,
-        logicalHeight: 1440,
-        ppi: 163,
-        refreshRate: 60,
-        category: .standard_4k
-    ),
+    // 4K
+    "4k-native": PresetConfig(name: "4K-Native", width: 3840, height: 2160, logicalWidth: 1920, logicalHeight: 1080, ppi: 163, hiDPI: true),
+    "4k-2560x1440": PresetConfig(name: "4K-2560", width: 5120, height: 2880, logicalWidth: 2560, logicalHeight: 1440, ppi: 163, hiDPI: true),
 ]
-
-// MARK: - SwiftUI Views
-
-struct MenuContentView: View {
-    @ObservedObject var appDelegate: AppDelegate
-    @State private var customWidth: String = "5120"
-    @State private var customHeight: String = "1440"
-    @State private var customPPI: String = "140"
-    @State private var showCustom = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: "display.2")
-                    .font(.title2)
-                    .foregroundColor(.accentColor)
-                Text("HiDPI Virtual Display")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding()
-            .background(Color.accentColor.opacity(0.1))
-
-            Divider()
-
-            // Status
-            HStack {
-                Circle()
-                    .fill(appDelegate.isActive ? Color.green : Color.gray)
-                    .frame(width: 10, height: 10)
-
-                if appDelegate.isActive {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Active: \(appDelegate.currentPresetName)")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Text("Looks like: \(appDelegate.currentResolution)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                } else {
-                    Text("No virtual display active")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                if appDelegate.isActive {
-                    Button("Disable") {
-                        appDelegate.destroyVirtualDisplay()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-            .padding()
-            .background(appDelegate.isActive ? Color.green.opacity(0.1) : Color.clear)
-
-            Divider()
-
-            // Preset Selection
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(PresetCategory.allCases.filter { $0 != .custom }, id: \.self) { category in
-                        let categoryPresets = presets.filter { $0.category == category }
-                        if !categoryPresets.isEmpty {
-                            PresetSection(
-                                category: category,
-                                presets: categoryPresets,
-                                appDelegate: appDelegate
-                            )
-                        }
-                    }
-
-                    // Custom Resolution Section
-                    VStack(alignment: .leading, spacing: 8) {
-                        Button(action: { withAnimation { showCustom.toggle() } }) {
-                            HStack {
-                                Image(systemName: showCustom ? "chevron.down" : "chevron.right")
-                                    .font(.caption)
-                                Text("Custom Resolution")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                Spacer()
-                            }
-                        }
-                        .buttonStyle(.plain)
-
-                        if showCustom {
-                            VStack(spacing: 12) {
-                                HStack {
-                                    Text("Looks like:")
-                                        .font(.caption)
-                                        .frame(width: 70, alignment: .leading)
-                                    TextField("Width", text: $customWidth)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 70)
-                                    Text("×")
-                                    TextField("Height", text: $customHeight)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 70)
-                                }
-
-                                HStack {
-                                    Text("PPI:")
-                                        .font(.caption)
-                                        .frame(width: 70, alignment: .leading)
-                                    TextField("PPI", text: $customPPI)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 70)
-
-                                    Spacer()
-
-                                    Button("Apply Custom") {
-                                        applyCustomResolution()
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.small)
-                                }
-
-                                if let w = UInt32(customWidth), let h = UInt32(customHeight) {
-                                    Text("Framebuffer: \(w * 2)×\(h * 2)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .padding(12)
-                            .background(Color.secondary.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                    }
-                }
-                .padding()
-            }
-
-            Divider()
-
-            // Footer
-            HStack {
-                Button("Quit") {
-                    appDelegate.destroyVirtualDisplay()
-                    NSApp.terminate(nil)
-                }
-
-                Spacer()
-
-                Link("GitHub", destination: URL(string: "https://github.com")!)
-                    .font(.caption)
-            }
-            .padding()
-        }
-        .frame(width: 340, height: 520)
-    }
-
-    func applyCustomResolution() {
-        guard let w = UInt32(customWidth),
-              let h = UInt32(customHeight),
-              let p = UInt32(customPPI) else { return }
-
-        let preset = DisplayPreset(
-            name: "custom-\(w)x\(h)",
-            displayName: "Custom \(w)×\(h)",
-            description: "Custom resolution",
-            framebufferWidth: w * 2,
-            framebufferHeight: h * 2,
-            logicalWidth: w,
-            logicalHeight: h,
-            ppi: p,
-            refreshRate: 60,
-            category: .custom
-        )
-        appDelegate.createVirtualDisplay(preset: preset)
-    }
-}
-
-struct PresetSection: View {
-    let category: PresetCategory
-    let presets: [DisplayPreset]
-    @ObservedObject var appDelegate: AppDelegate
-    @State private var isExpanded = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button(action: { withAnimation { isExpanded.toggle() } }) {
-                HStack {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(category.rawValue)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    Spacer()
-                }
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(spacing: 4) {
-                    ForEach(presets) { preset in
-                        PresetRow(preset: preset, appDelegate: appDelegate)
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct PresetRow: View {
-    let preset: DisplayPreset
-    @ObservedObject var appDelegate: AppDelegate
-
-    var isSelected: Bool {
-        appDelegate.currentPresetName == preset.displayName
-    }
-
-    var body: some View {
-        Button(action: {
-            print("Button clicked: \(preset.displayName)")
-            appDelegate.createVirtualDisplay(preset: preset)
-        }) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(preset.displayName)
-                        .font(.subheadline)
-                        .fontWeight(isSelected ? .bold : .regular)
-                        .foregroundColor(isSelected ? .accentColor : .primary)
-                    Text(preset.description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.title3)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.05))
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
-    }
-}
-
-// MARK: - Launch at Login
-
-class LaunchAtLoginManager {
-    static var isEnabled: Bool {
-        get {
-            UserDefaults.standard.bool(forKey: "launchAtLogin")
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: "launchAtLogin")
-            if newValue {
-                enableLaunchAtLogin()
-            } else {
-                disableLaunchAtLogin()
-            }
-        }
-    }
-
-    static func enableLaunchAtLogin() {
-        let launchAgentPath = NSHomeDirectory() + "/Library/LaunchAgents/com.hidpi.virtualdisplay.plist"
-        let appPath = Bundle.main.bundlePath
-
-        let plist: [String: Any] = [
-            "Label": "com.hidpi.virtualdisplay",
-            "ProgramArguments": [appPath + "/Contents/MacOS/HiDPIDisplay"],
-            "RunAtLoad": true,
-            "KeepAlive": false
-        ]
-
-        let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try? data?.write(to: URL(fileURLWithPath: launchAgentPath))
-    }
-
-    static func disableLaunchAtLogin() {
-        let launchAgentPath = NSHomeDirectory() + "/Library/LaunchAgents/com.hidpi.virtualdisplay.plist"
-        try? FileManager.default.removeItem(atPath: launchAgentPath)
-    }
-}
