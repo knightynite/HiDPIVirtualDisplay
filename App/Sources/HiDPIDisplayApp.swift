@@ -1,6 +1,6 @@
-// HiDPIDisplayApp.swift
-// A menu bar app for creating HiDPI virtual displays on macOS
-// Designed for Samsung G9 57" and other high-resolution monitors
+// G9 Helper
+// A menu bar app for HiDPI scaling on Samsung G9 and other monitors
+// Made with love by AL in Dallas
 
 import SwiftUI
 import AppKit
@@ -152,11 +152,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        let aboutItem = NSMenuItem(title: "About G9 Helper", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
         statusItem?.menu = menu
+    }
+
+    @objc func showAbout() {
+        let alert = NSAlert()
+        alert.messageText = "G9 Helper"
+        alert.informativeText = "Version 1.0.0\n\nEnables HiDPI (Retina) scaling on Samsung G9 and other monitors.\n\nMade with love by AL in Dallas"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     func addPresetItem(to menu: NSMenu, preset: String, title: String) {
