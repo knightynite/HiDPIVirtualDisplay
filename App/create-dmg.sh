@@ -3,8 +3,8 @@
 
 set -e
 
-APP_NAME="HiDPI Display"
-DMG_NAME="HiDPI.Display"
+APP_NAME="G9 Helper"
+DMG_NAME="G9.Helper"
 BUILD_DIR="build"
 DMG_DIR="${BUILD_DIR}/dmg"
 VERSION="1.0.0"
@@ -26,19 +26,24 @@ ln -s /Applications "${DMG_DIR}/Applications"
 
 # Create README
 cat > "${DMG_DIR}/README.txt" << 'EOF'
-HiDPI Display v1.0.0
+G9 Helper v1.0.0
+Made with love by AL in Dallas
 
 Installation:
-1. Drag "HiDPI Display.app" to the Applications folder
+1. Drag "G9 Helper.app" to the Applications folder
 2. Launch from Applications or Spotlight
 3. Look for the display icon in your menu bar
+
+Uninstallation:
+1. Quit G9 Helper from the menu bar (click icon > Quit)
+2. Drag "G9 Helper.app" from Applications to Trash
+3. Empty Trash
 
 For more information, visit:
 https://github.com/knightynite/HiDPIVirtualDisplay
 
-Note: This app uses private macOS APIs and may require
-special permissions. If you encounter issues, try
-right-clicking the app and selecting "Open".
+Note: This app uses private macOS APIs. If you encounter
+issues, try right-clicking the app and selecting "Open".
 EOF
 
 # Create the DMG
