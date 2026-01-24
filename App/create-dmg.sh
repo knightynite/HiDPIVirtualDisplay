@@ -9,7 +9,7 @@ BUILD_DIR="build"
 DMG_DIR="${BUILD_DIR}/dmg"
 VERSION="1.0.0"
 
-echo "📦 Creating DMG..."
+echo "Creating DMG..."
 
 # Build the app first
 ./build.sh
@@ -34,7 +34,7 @@ Installation:
 3. Look for the display icon in your menu bar
 
 For more information, visit:
-https://github.com/yourusername/HiDPIVirtualDisplay
+https://github.com/knightynite/HiDPIVirtualDisplay
 
 Note: This app uses private macOS APIs and may require
 special permissions. If you encounter issues, try
@@ -51,6 +51,6 @@ hdiutil create -volname "${APP_NAME}" \
 # Clean up
 rm -rf "${DMG_DIR}"
 
-echo "✅ DMG created: ${BUILD_DIR}/${DMG_NAME}.dmg"
+echo "DMG created: ${BUILD_DIR}/${DMG_NAME}.dmg"
 echo ""
 echo "File size: $(du -h "${BUILD_DIR}/${DMG_NAME}.dmg" | cut -f1)"

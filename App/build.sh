@@ -16,14 +16,14 @@ SWIFT_SOURCES="Sources/HiDPIDisplayApp.swift"
 OBJC_SOURCES="Sources/VirtualDisplayManager.m"
 BRIDGING_HEADER="Sources/BridgingHeader.h"
 
-echo "🔨 Building ${APP_NAME}..."
+echo "Building ${APP_NAME}..."
 
 # Create app bundle structure
 mkdir -p "${MACOS}"
 mkdir -p "${RESOURCES}"
 
 # Compile the app
-echo "📦 Compiling..."
+echo "Compiling..."
 swiftc \
     -parse-as-library \
     ${SWIFT_SOURCES} \
@@ -39,10 +39,10 @@ swiftc \
 cp Info.plist "${CONTENTS}/"
 
 # Sign the app with entitlements
-echo "🔏 Signing..."
+echo "Signing..."
 codesign --force --sign - --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}" || true
 
-echo "✅ Build complete: ${APP_BUNDLE}"
+echo "Build complete: ${APP_BUNDLE}"
 echo ""
 echo "To install:"
 echo "  cp -r \"${APP_BUNDLE}\" /Applications/"
