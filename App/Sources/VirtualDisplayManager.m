@@ -8,6 +8,8 @@
 // Store just one virtual display at a time
 @property (nonatomic, strong) CGVirtualDisplay *currentDisplay;
 @property (nonatomic, assign) CGDirectDisplayID currentDisplayID;
+// Keep reference to old display during cleanup to prevent premature deallocation
+@property (nonatomic, strong) CGVirtualDisplay *pendingCleanupDisplay;
 @end
 
 @implementation VirtualDisplayManager
@@ -43,13 +45,25 @@
     // Destroy any existing display first
     if (self.currentDisplay != nil) {
         NSLog(@"VDM: Destroying existing display %u before creating new one", self.currentDisplayID);
+        // Move to pending cleanup to prevent race condition with internal VirtualDisplayListener
+        // The old display will be released when we're done creating the new one
+        self.pendingCleanupDisplay = self.currentDisplay;
         self.currentDisplay = nil;
         self.currentDisplayID = kCGNullDirectDisplay;
         // Give system time to clean up
         [NSThread sleepForTimeInterval:0.5];
     }
 
+    // Clean up pending display from previous iteration
+    if (self.pendingCleanupDisplay != nil) {
+        @autoreleasepool {
+            self.pendingCleanupDisplay = nil;
+        }
+    }
+
     @try {
+        // Wrap in autoreleasepool to ensure proper cleanup of temporary objects
+        @autoreleasepool {
         // Create settings
         CGVirtualDisplaySettings *settings = [[CGVirtualDisplaySettings alloc] init];
         settings.hiDPI = hiDPI ? 1 : 0;
@@ -83,10 +97,10 @@
         descriptor.productID = 0x5678;
         descriptor.serialNum = arc4random();  // Random serial for uniqueness
 
-        // Termination handler (no weak reference since we're not using ARC)
-        descriptor.terminationHandler = ^(id display, id reason) {
-            NSLog(@"VDM: Virtual display terminated: %@", reason);
-        };
+        // Don't set termination handler - it causes race conditions with the internal
+        // VirtualDisplayListener queue when the display is released, leading to crashes.
+        // The handler is called asynchronously and may try to access deallocated memory.
+        descriptor.terminationHandler = nil;
 
         // Calculate mode dimensions
         unsigned int modeWidth = hiDPI ? width / 2 : width;
@@ -140,6 +154,7 @@
         NSLog(@"VDM: Virtual display created successfully with ID: %u", displayID);
 
         return displayID;
+        } // @autoreleasepool
 
     } @catch (NSException *exception) {
         NSLog(@"VDM: Exception creating virtual display: %@", exception);
@@ -223,8 +238,16 @@
 - (void)destroyVirtualDisplay:(CGDirectDisplayID)displayID {
     NSLog(@"VDM: Destroying virtual display: %u (current: %u)", displayID, self.currentDisplayID);
     if (displayID == self.currentDisplayID) {
-        self.currentDisplay = nil;
-        self.currentDisplayID = kCGNullDirectDisplay;
+        @autoreleasepool {
+            // Move to pending cleanup first to prevent race condition
+            self.pendingCleanupDisplay = self.currentDisplay;
+            self.currentDisplay = nil;
+            self.currentDisplayID = kCGNullDirectDisplay;
+            // Give internal queue time to finish
+            [NSThread sleepForTimeInterval:0.3];
+            // Now release the pending display
+            self.pendingCleanupDisplay = nil;
+        }
         NSLog(@"VDM: Virtual display destroyed");
     } else {
         NSLog(@"VDM: Display ID mismatch, not destroying");
@@ -233,8 +256,18 @@
 
 - (void)destroyAllVirtualDisplays {
     NSLog(@"VDM: Destroying all virtual displays (current: %u)", self.currentDisplayID);
-    self.currentDisplay = nil;
-    self.currentDisplayID = kCGNullDirectDisplay;
+    @autoreleasepool {
+        // Move to pending cleanup first to prevent race condition
+        if (self.currentDisplay != nil) {
+            self.pendingCleanupDisplay = self.currentDisplay;
+            self.currentDisplay = nil;
+        }
+        self.currentDisplayID = kCGNullDirectDisplay;
+        // Give internal queue time to finish
+        [NSThread sleepForTimeInterval:0.3];
+        // Now release the pending display
+        self.pendingCleanupDisplay = nil;
+    }
     NSLog(@"VDM: All virtual displays destroyed");
 }
 
