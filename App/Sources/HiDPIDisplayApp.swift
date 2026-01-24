@@ -10,6 +10,97 @@ func debugLog(_ message: String) {
     NSLog("HiDPI: %@", message)
 }
 
+// MARK: - Status Window
+
+class StatusWindowController {
+    private var window: NSWindow?
+    private var progressIndicator: NSProgressIndicator?
+    private var statusLabel: NSTextField?
+
+    static let shared = StatusWindowController()
+
+    private init() {}
+
+    func show(message: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.createAndShowWindow(message: message)
+        }
+    }
+
+    func updateStatus(_ message: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.statusLabel?.stringValue = message
+        }
+    }
+
+    func hide() {
+        DispatchQueue.main.async { [weak self] in
+            self?.window?.close()
+            self?.window = nil
+        }
+    }
+
+    private func createAndShowWindow(message: String) {
+        // Create window
+        let windowRect = NSRect(x: 0, y: 0, width: 300, height: 120)
+        let window = NSWindow(
+            contentRect: windowRect,
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = NSColor.windowBackgroundColor
+        window.level = .floating
+        window.center()
+
+        // Create content view
+        let contentView = NSView(frame: windowRect)
+
+        // App icon or display icon
+        let iconView = NSImageView(frame: NSRect(x: 30, y: 45, width: 40, height: 40))
+        if let icon = NSImage(systemSymbolName: "display", accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: 32, weight: .medium)
+            iconView.image = icon.withSymbolConfiguration(config)
+            iconView.contentTintColor = NSColor.controlAccentColor
+        }
+        contentView.addSubview(iconView)
+
+        // Progress indicator
+        let progress = NSProgressIndicator(frame: NSRect(x: 85, y: 65, width: 20, height: 20))
+        progress.style = .spinning
+        progress.controlSize = .small
+        progress.startAnimation(nil)
+        contentView.addSubview(progress)
+        self.progressIndicator = progress
+
+        // Title label
+        let titleLabel = NSTextField(labelWithString: "G9 Helper")
+        titleLabel.frame = NSRect(x: 110, y: 60, width: 160, height: 24)
+        titleLabel.font = NSFont.boldSystemFont(ofSize: 14)
+        titleLabel.textColor = NSColor.labelColor
+        contentView.addSubview(titleLabel)
+
+        // Status label
+        let statusLabel = NSTextField(labelWithString: message)
+        statusLabel.frame = NSRect(x: 30, y: 20, width: 240, height: 20)
+        statusLabel.font = NSFont.systemFont(ofSize: 12)
+        statusLabel.textColor = NSColor.secondaryLabelColor
+        statusLabel.alignment = .center
+        contentView.addSubview(statusLabel)
+        self.statusLabel = statusLabel
+
+        window.contentView = contentView
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        self.window = window
+    }
+}
+
 @main
 struct HiDPIDisplayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -193,6 +284,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pendingTimer?.invalidate()
         pendingTimer = nil
 
+        // Show status window
+        StatusWindowController.shared.show(message: "Preparing display configuration...")
+
         // First, completely reset display state
         debugLog("Resetting display configuration...")
         let manager = VirtualDisplayManager.shared()
@@ -230,12 +324,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func createVirtualDisplayAsync(config: PresetConfig) {
         debugLog("Creating virtual display: \(config.width)x\(config.height)")
 
+        StatusWindowController.shared.updateStatus("Detecting external display...")
+
         guard let externalID = findExternalDisplay() else {
             debugLog("ERROR: No external display found")
+            StatusWindowController.shared.updateStatus("No external display found")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                StatusWindowController.shared.hide()
+            }
             rebuildMenu()
             return
         }
         debugLog("Using external display: \(externalID)")
+
+        StatusWindowController.shared.updateStatus("Creating virtual display...")
 
         // Create virtual display on main thread
         let manager = VirtualDisplayManager.shared()
@@ -252,11 +354,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if virtualID == 0 || virtualID == UInt32.max {
             debugLog("ERROR: Failed to create virtual display (returned \(virtualID))")
+            StatusWindowController.shared.updateStatus("Failed to create virtual display")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                StatusWindowController.shared.hide()
+            }
             rebuildMenu()
             return
         }
         debugLog("Created virtual display: \(virtualID)")
         currentVirtualID = virtualID
+
+        StatusWindowController.shared.updateStatus("Configuring display mirror...")
 
         // Wait for display to initialize using Timer (non-blocking)
         debugLog("Scheduling mirror in 3 seconds...")
@@ -274,13 +382,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if success {
             isActive = true
             currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
+            StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
         } else {
             debugLog("Mirror failed, cleaning up...")
             manager.destroyVirtualDisplay(virtualID)
             currentVirtualID = 0
             isActive = false
             currentPresetName = ""
+            StatusWindowController.shared.updateStatus("Failed to configure display")
         }
+
+        // Hide status window after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            StatusWindowController.shared.hide()
+        }
+
         rebuildMenu()
     }
 
@@ -325,8 +441,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func disableHiDPIAction() {
         pendingTimer?.invalidate()
         pendingTimer = nil
+
+        StatusWindowController.shared.show(message: "Disabling HiDPI...")
         disableHiDPISync()
         rebuildMenu()
+
+        StatusWindowController.shared.updateStatus("HiDPI disabled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            StatusWindowController.shared.hide()
+        }
     }
 
     @objc func quitApp() {
