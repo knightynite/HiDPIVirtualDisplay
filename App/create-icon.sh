@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create app icon for G9 Helper
+# Create app icon for G9 Helper - Odyssey-style curved monitor with G
 
 set -e
 
@@ -9,7 +9,7 @@ RESOURCES_DIR="Resources"
 mkdir -p "${ICON_DIR}"
 mkdir -p "${RESOURCES_DIR}"
 
-# Create a simple but nice icon using Swift and AppKit
+# Create icon using Swift and AppKit
 cat > /tmp/create_icon.swift << 'SWIFT'
 import AppKit
 
@@ -20,75 +20,156 @@ func createIcon(size: Int, scale: Int) -> NSImage {
     image.lockFocus()
 
     let bounds = NSRect(x: 0, y: 0, width: actualSize, height: actualSize)
-    let inset = CGFloat(actualSize) * 0.1
-    let mainRect = bounds.insetBy(dx: inset, dy: inset)
+    let s = CGFloat(actualSize)
 
-    // Background gradient (dark blue to purple)
-    let gradient = NSGradient(colors: [
-        NSColor(red: 0.1, green: 0.1, blue: 0.3, alpha: 1.0),
-        NSColor(red: 0.2, green: 0.1, blue: 0.4, alpha: 1.0)
+    // Background - dark gradient (gaming aesthetic)
+    let bgRect = bounds.insetBy(dx: s * 0.08, dy: s * 0.08)
+    let bgPath = NSBezierPath(roundedRect: bgRect, xRadius: s * 0.18, yRadius: s * 0.18)
+
+    let bgGradient = NSGradient(colors: [
+        NSColor(red: 0.08, green: 0.08, blue: 0.12, alpha: 1.0),
+        NSColor(red: 0.15, green: 0.12, blue: 0.20, alpha: 1.0)
     ])!
+    bgGradient.draw(in: bgPath, angle: -45)
 
-    // Rounded rectangle background
-    let bgPath = NSBezierPath(roundedRect: mainRect, xRadius: CGFloat(actualSize) * 0.2, yRadius: CGFloat(actualSize) * 0.2)
-    gradient.draw(in: bgPath, angle: -45)
+    // Curved ultrawide monitor (Odyssey style)
+    let monitorPath = NSBezierPath()
 
-    // Monitor outline
-    let monitorWidth = CGFloat(actualSize) * 0.7
-    let monitorHeight = CGFloat(actualSize) * 0.35
-    let monitorX = (CGFloat(actualSize) - monitorWidth) / 2
-    let monitorY = CGFloat(actualSize) * 0.4
-    let monitorRect = NSRect(x: monitorX, y: monitorY, width: monitorWidth, height: monitorHeight)
+    let monitorWidth = s * 0.75
+    let monitorHeight = s * 0.32
+    let curveDepth = s * 0.06
+    let monitorX = (s - monitorWidth) / 2
+    let monitorY = s * 0.42
 
-    // Monitor bezel
-    let bezelPath = NSBezierPath(roundedRect: monitorRect, xRadius: 4, yRadius: 4)
-    NSColor(red: 0.3, green: 0.3, blue: 0.35, alpha: 1.0).setFill()
-    bezelPath.fill()
+    // Draw curved monitor shape (concave curve like Odyssey)
+    monitorPath.move(to: NSPoint(x: monitorX, y: monitorY))
 
-    // Monitor screen (gradient to show HiDPI quality)
-    let screenInset: CGFloat = CGFloat(actualSize) * 0.02
-    let screenRect = monitorRect.insetBy(dx: screenInset, dy: screenInset)
-    let screenPath = NSBezierPath(roundedRect: screenRect, xRadius: 2, yRadius: 2)
+    // Bottom edge - curved inward
+    monitorPath.curve(
+        to: NSPoint(x: monitorX + monitorWidth, y: monitorY),
+        controlPoint1: NSPoint(x: monitorX + monitorWidth * 0.3, y: monitorY + curveDepth),
+        controlPoint2: NSPoint(x: monitorX + monitorWidth * 0.7, y: monitorY + curveDepth)
+    )
 
+    // Right edge
+    monitorPath.line(to: NSPoint(x: monitorX + monitorWidth, y: monitorY + monitorHeight))
+
+    // Top edge - curved inward
+    monitorPath.curve(
+        to: NSPoint(x: monitorX, y: monitorY + monitorHeight),
+        controlPoint1: NSPoint(x: monitorX + monitorWidth * 0.7, y: monitorY + monitorHeight - curveDepth),
+        controlPoint2: NSPoint(x: monitorX + monitorWidth * 0.3, y: monitorY + monitorHeight - curveDepth)
+    )
+
+    monitorPath.close()
+
+    // Monitor bezel (dark gray)
+    NSColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 1.0).setFill()
+    monitorPath.fill()
+
+    // Screen area (slightly inset)
+    let screenPath = NSBezierPath()
+    let screenInset = s * 0.025
+    let screenWidth = monitorWidth - screenInset * 2
+    let screenHeight = monitorHeight - screenInset * 2
+    let screenX = monitorX + screenInset
+    let screenY = monitorY + screenInset
+    let screenCurve = curveDepth * 0.8
+
+    screenPath.move(to: NSPoint(x: screenX, y: screenY))
+    screenPath.curve(
+        to: NSPoint(x: screenX + screenWidth, y: screenY),
+        controlPoint1: NSPoint(x: screenX + screenWidth * 0.3, y: screenY + screenCurve),
+        controlPoint2: NSPoint(x: screenX + screenWidth * 0.7, y: screenY + screenCurve)
+    )
+    screenPath.line(to: NSPoint(x: screenX + screenWidth, y: screenY + screenHeight))
+    screenPath.curve(
+        to: NSPoint(x: screenX, y: screenY + screenHeight),
+        controlPoint1: NSPoint(x: screenX + screenWidth * 0.7, y: screenY + screenHeight - screenCurve),
+        controlPoint2: NSPoint(x: screenX + screenWidth * 0.3, y: screenY + screenHeight - screenCurve)
+    )
+    screenPath.close()
+
+    // Screen gradient (blue to purple - gaming RGB aesthetic)
     let screenGradient = NSGradient(colors: [
-        NSColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 1.0),
-        NSColor(red: 0.4, green: 0.3, blue: 0.8, alpha: 1.0)
+        NSColor(red: 0.1, green: 0.4, blue: 0.9, alpha: 1.0),
+        NSColor(red: 0.5, green: 0.2, blue: 0.8, alpha: 1.0)
     ])!
     screenGradient.draw(in: screenPath, angle: 45)
 
+    // RGB accent line at bottom of screen
+    let rgbPath = NSBezierPath()
+    let rgbY = screenY + s * 0.01
+    rgbPath.move(to: NSPoint(x: screenX + screenWidth * 0.1, y: rgbY))
+    rgbPath.curve(
+        to: NSPoint(x: screenX + screenWidth * 0.9, y: rgbY),
+        controlPoint1: NSPoint(x: screenX + screenWidth * 0.35, y: rgbY + screenCurve * 0.5),
+        controlPoint2: NSPoint(x: screenX + screenWidth * 0.65, y: rgbY + screenCurve * 0.5)
+    )
+    rgbPath.lineWidth = s * 0.015
+
+    let rgbGradient = NSGradient(colors: [
+        NSColor(red: 0.0, green: 0.8, blue: 1.0, alpha: 1.0),
+        NSColor(red: 0.8, green: 0.2, blue: 0.8, alpha: 1.0),
+        NSColor(red: 1.0, green: 0.3, blue: 0.3, alpha: 1.0)
+    ])!
+
+    // Draw RGB line
+    NSColor(red: 0.0, green: 0.9, blue: 1.0, alpha: 0.8).setStroke()
+    rgbPath.stroke()
+
     // Monitor stand
-    let standWidth = CGFloat(actualSize) * 0.15
-    let standHeight = CGFloat(actualSize) * 0.12
-    let standX = (CGFloat(actualSize) - standWidth) / 2
-    let standY = monitorY - standHeight + 2
-    let standRect = NSRect(x: standX, y: standY, width: standWidth, height: standHeight)
+    let standWidth = s * 0.12
+    let standHeight = s * 0.1
+    let standX = (s - standWidth) / 2
+    let standY = monitorY - standHeight + s * 0.02
 
-    NSColor(red: 0.25, green: 0.25, blue: 0.3, alpha: 1.0).setFill()
-    NSBezierPath(rect: standRect).fill()
+    let standPath = NSBezierPath()
+    standPath.move(to: NSPoint(x: standX + standWidth * 0.3, y: monitorY))
+    standPath.line(to: NSPoint(x: standX, y: standY))
+    standPath.line(to: NSPoint(x: standX + standWidth, y: standY))
+    standPath.line(to: NSPoint(x: standX + standWidth * 0.7, y: monitorY))
+    standPath.close()
 
-    // Stand base
-    let baseWidth = CGFloat(actualSize) * 0.25
-    let baseHeight = CGFloat(actualSize) * 0.03
-    let baseX = (CGFloat(actualSize) - baseWidth) / 2
-    let baseY = standY - baseHeight + 2
-    let baseRect = NSRect(x: baseX, y: baseY, width: baseWidth, height: baseHeight)
+    NSColor(red: 0.18, green: 0.18, blue: 0.22, alpha: 1.0).setFill()
+    standPath.fill()
 
-    let basePath = NSBezierPath(roundedRect: baseRect, xRadius: 2, yRadius: 2)
-    NSColor(red: 0.25, green: 0.25, blue: 0.3, alpha: 1.0).setFill()
+    // Stand base (wider, curved)
+    let baseWidth = s * 0.28
+    let baseHeight = s * 0.035
+    let baseX = (s - baseWidth) / 2
+    let baseY = standY - baseHeight + s * 0.015
+
+    let basePath = NSBezierPath(roundedRect: NSRect(x: baseX, y: baseY, width: baseWidth, height: baseHeight),
+                                  xRadius: baseHeight * 0.4, yRadius: baseHeight * 0.4)
+    NSColor(red: 0.18, green: 0.18, blue: 0.22, alpha: 1.0).setFill()
     basePath.fill()
 
-    // "2x" text to indicate HiDPI
-    let fontSize = CGFloat(actualSize) * 0.15
-    let font = NSFont.boldSystemFont(ofSize: fontSize)
-    let text = "2x"
+    // Draw "G" on screen
+    let fontSize = s * 0.22
+    let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+    let gText = "G"
     let attributes: [NSAttributedString.Key: Any] = [
         .font: font,
         .foregroundColor: NSColor.white
     ]
-    let textSize = text.size(withAttributes: attributes)
-    let textX = (CGFloat(actualSize) - textSize.width) / 2
-    let textY = monitorY + (monitorHeight - textSize.height) / 2
-    text.draw(at: NSPoint(x: textX, y: textY), withAttributes: attributes)
+    let textSize = gText.size(withAttributes: attributes)
+    let textX = (s - textSize.width) / 2
+    let textY = monitorY + (monitorHeight - textSize.height) / 2 + s * 0.01
+
+    // Text shadow for depth
+    let shadow = NSShadow()
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
+    shadow.shadowOffset = NSSize(width: 0, height: -s * 0.01)
+    shadow.shadowBlurRadius = s * 0.02
+
+    let shadowAttributes: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: NSColor.white,
+        .shadow: shadow
+    ]
+
+    gText.draw(at: NSPoint(x: textX, y: textY), withAttributes: shadowAttributes)
 
     image.unlockFocus()
     return image
@@ -113,11 +194,9 @@ func saveIcon(image: NSImage, path: String) {
 let sizes = [16, 32, 128, 256, 512]
 
 for size in sizes {
-    // 1x
     let icon1x = createIcon(size: size, scale: 1)
     saveIcon(image: icon1x, path: "AppIcon.iconset/icon_\(size)x\(size).png")
 
-    // 2x
     let icon2x = createIcon(size: size, scale: 2)
     saveIcon(image: icon2x, path: "AppIcon.iconset/icon_\(size)x\(size)@2x.png")
 }
