@@ -51,6 +51,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// Destroy all virtual displays created by this manager
 - (void)destroyAllVirtualDisplays;
 
+/// Reset all display mirroring configurations
+/// This stops mirroring on all non-builtin displays
+- (void)resetAllMirroring;
+
 /// List all active displays
 - (NSArray<NSDictionary *> *)listAllDisplays;
 

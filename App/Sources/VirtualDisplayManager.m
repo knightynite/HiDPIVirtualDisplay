@@ -238,6 +238,32 @@
     NSLog(@"VDM: All virtual displays destroyed");
 }
 
+- (void)resetAllMirroring {
+    NSLog(@"VDM: Resetting all display mirroring...");
+
+    CGDirectDisplayID displayList[32];
+    uint32_t displayCount;
+
+    CGError err = CGGetOnlineDisplayList(32, displayList, &displayCount);
+    if (err != kCGErrorSuccess) {
+        NSLog(@"VDM: Failed to get display list: %d", err);
+        return;
+    }
+
+    // Find all displays that are currently mirroring something
+    for (uint32_t i = 0; i < displayCount; i++) {
+        CGDirectDisplayID displayID = displayList[i];
+        CGDirectDisplayID mirrorOf = CGDisplayMirrorsDisplay(displayID);
+
+        if (mirrorOf != kCGNullDirectDisplay) {
+            NSLog(@"VDM: Display %u is mirroring %u, stopping...", displayID, mirrorOf);
+            [self stopMirroringForDisplay:displayID];
+        }
+    }
+
+    NSLog(@"VDM: All mirroring reset complete");
+}
+
 - (NSArray<NSDictionary *> *)listAllDisplays {
     NSMutableArray *displays = [NSMutableArray array];
 
