@@ -18,11 +18,7 @@
             --border: #2a2a3a;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         html, body {
             height: 100%;
@@ -33,18 +29,15 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg-dark);
             color: var(--text);
-            display: flex;
-            flex-direction: column;
         }
 
         .page {
-            flex: 1;
+            height: 100%;
             display: flex;
             flex-direction: column;
-            max-width: 1100px;
+            max-width: 1200px;
             margin: 0 auto;
-            padding: 20px 30px;
-            width: 100%;
+            padding: 15px 40px;
         }
 
         /* Header */
@@ -52,12 +45,12 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding-bottom: 15px;
+            padding-bottom: 12px;
             border-bottom: 1px solid var(--border);
         }
 
         .logo {
-            font-size: 1.3rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: var(--text);
             text-decoration: none;
@@ -67,31 +60,37 @@
             color: var(--text-muted);
             text-decoration: none;
             margin-left: 20px;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
         }
 
         .nav-links a:hover { color: var(--accent); }
 
-        /* Main Content */
+        /* Main Layout */
         main {
             flex: 1;
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            padding: 25px 0;
+            gap: 40px;
+            padding: 20px 0;
+            align-items: center;
         }
 
-        /* Left Column - Hero */
+        /* Left - Hero with Graphic */
         .hero {
             display: flex;
             flex-direction: column;
-            justify-content: center;
+        }
+
+        .monitor-graphic {
+            width: 100%;
+            max-width: 420px;
+            margin-bottom: 20px;
         }
 
         .hero h1 {
-            font-size: 2.4rem;
+            font-size: 2.2rem;
             font-weight: 700;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
             background: linear-gradient(135deg, #fff 0%, #4a9eff 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -99,9 +98,10 @@
         }
 
         .hero .tagline {
-            font-size: 1.1rem;
+            font-size: 1rem;
             color: var(--text-muted);
-            margin-bottom: 20px;
+            margin-bottom: 18px;
+            line-height: 1.5;
         }
 
         .download-btn {
@@ -110,10 +110,10 @@
             gap: 10px;
             background: var(--accent);
             color: white;
-            padding: 14px 28px;
+            padding: 12px 24px;
             border-radius: 10px;
             text-decoration: none;
-            font-size: 1.05rem;
+            font-size: 1rem;
             font-weight: 600;
             width: fit-content;
             transition: all 0.2s;
@@ -125,126 +125,116 @@
         }
 
         .download-info {
-            margin-top: 12px;
-            font-size: 0.85rem;
+            margin-top: 10px;
+            font-size: 0.8rem;
             color: var(--text-muted);
         }
 
         .version-badge {
             background: var(--bg-card);
-            padding: 3px 10px;
-            border-radius: 12px;
-            margin-right: 8px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-right: 6px;
         }
 
-        /* Install Steps */
-        .install-steps {
-            margin-top: 25px;
-        }
-
-        .install-steps h3 {
-            font-size: 0.95rem;
-            color: var(--text-muted);
-            margin-bottom: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .steps-row {
-            display: flex;
-            gap: 12px;
-        }
-
-        .step {
-            flex: 1;
-            background: var(--bg-card);
-            padding: 12px 14px;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-        }
-
-        .step-num {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            background: var(--accent);
-            border-radius: 50%;
-            text-align: center;
-            font-size: 0.75rem;
-            font-weight: 700;
-            line-height: 20px;
-            margin-right: 8px;
-        }
-
-        .step span {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        /* Security Note */
-        .security-note {
-            margin-top: 15px;
-            padding: 12px 14px;
-            background: rgba(251, 191, 36, 0.1);
-            border: 1px solid var(--warning);
-            border-radius: 8px;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-
-        .security-note strong {
-            color: var(--warning);
-        }
-
-        /* Right Column - Info */
+        /* Right - Info Panel */
         .info-panel {
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 12px;
         }
 
         .info-section {
             background: var(--bg-card);
             border-radius: 10px;
             border: 1px solid var(--border);
-            padding: 18px;
+            padding: 14px 16px;
         }
 
         .info-section h3 {
-            font-size: 0.9rem;
+            font-size: 0.8rem;
             color: var(--text-muted);
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
 
+        /* Install Steps */
+        .steps-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .step {
+            flex: 1;
+            background: var(--bg-dark);
+            padding: 10px 12px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .step-num {
+            width: 18px;
+            height: 18px;
+            background: var(--accent);
+            border-radius: 50%;
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .step span:last-child {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .security-note {
+            margin-top: 8px;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            padding: 8px 10px;
+            background: rgba(251, 191, 36, 0.08);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            border-radius: 6px;
+        }
+
+        .security-note strong { color: var(--warning); }
+
         /* Compatibility */
         .compat-row {
             display: flex;
-            gap: 15px;
+            gap: 12px;
         }
 
         .compat-item {
             flex: 1;
             text-align: center;
+            padding: 8px;
+            background: var(--bg-dark);
+            border-radius: 6px;
         }
 
         .compat-item h4 {
-            font-size: 0.85rem;
-            margin-bottom: 4px;
+            font-size: 0.8rem;
+            margin-bottom: 2px;
         }
 
         .compat-item p {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             color: var(--text-muted);
         }
 
         .status {
             display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 0.7rem;
-            margin-top: 5px;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 0.65rem;
+            margin-top: 4px;
         }
 
         .status.full { background: rgba(74, 222, 128, 0.2); color: var(--success); }
@@ -253,12 +243,12 @@
         /* Monitors Table */
         .monitors-table {
             width: 100%;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
         }
 
         .monitors-table th,
         .monitors-table td {
-            padding: 8px 10px;
+            padding: 6px 8px;
             text-align: left;
             border-bottom: 1px solid var(--border);
         }
@@ -266,27 +256,36 @@
         .monitors-table th {
             color: var(--text-muted);
             font-weight: 600;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
         }
 
         .monitors-table tr:last-child td { border-bottom: none; }
 
-        .recommended { color: var(--success); font-size: 0.7rem; }
+        .recommended { color: var(--success); font-size: 0.65rem; }
+
+        /* Notes */
+        .notes-list {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin: 0;
+            padding-left: 14px;
+            line-height: 1.7;
+        }
 
         /* Footer */
         footer {
-            padding: 15px 0;
+            padding: 12px 0;
             border-top: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
         }
 
         footer a {
             color: var(--text-muted);
             text-decoration: none;
-            margin-right: 20px;
+            margin-right: 16px;
         }
 
         footer a:hover { color: var(--accent); }
@@ -294,26 +293,26 @@
         .coffee-btn {
             background: #ffdd00;
             color: #000;
-            padding: 6px 14px;
-            border-radius: 6px;
+            padding: 5px 12px;
+            border-radius: 5px;
             text-decoration: none;
             font-weight: 600;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
         }
-
-        .coffee-btn:hover { opacity: 0.9; }
 
         .footer-right {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 12px;
             color: var(--text-muted);
         }
 
         /* Responsive */
-        @media (max-width: 800px) {
+        @media (max-width: 900px) {
             html, body { overflow: auto; }
-            main { grid-template-columns: 1fr; }
+            main { grid-template-columns: 1fr; gap: 20px; }
+            .monitor-graphic { max-width: 300px; margin: 0 auto 15px; }
+            .hero { text-align: center; align-items: center; }
             .steps-row { flex-direction: column; }
         }
     </style>
@@ -331,11 +330,55 @@
 
         <main>
             <div class="hero">
+                <!-- Curved Monitor Graphic -->
+                <svg class="monitor-graphic" viewBox="0 0 400 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Monitor bezel -->
+                    <path d="M20 30 Q200 60 380 30 L380 120 Q200 90 20 120 Z" fill="#1a1a24" stroke="#2a2a3a" stroke-width="2"/>
+                    <!-- Screen -->
+                    <path d="M30 38 Q200 65 370 38 L370 112 Q200 85 30 112 Z" fill="url(#screenGrad)"/>
+                    <!-- Screen content - blurry vs sharp text simulation -->
+                    <g opacity="0.6">
+                        <!-- Left side - blurry -->
+                        <rect x="50" y="55" width="80" height="6" rx="2" fill="#666" opacity="0.5"/>
+                        <rect x="50" y="65" width="60" height="4" rx="1" fill="#555" opacity="0.4"/>
+                        <rect x="50" y="73" width="70" height="4" rx="1" fill="#555" opacity="0.4"/>
+                        <text x="70" y="95" font-size="8" fill="#777" font-family="system-ui">Blurry</text>
+                    </g>
+                    <!-- Arrow -->
+                    <path d="M175 75 L195 75 M190 70 L195 75 L190 80" stroke="#4a9eff" stroke-width="2" stroke-linecap="round"/>
+                    <!-- Right side - sharp HiDPI -->
+                    <g>
+                        <rect x="220" y="52" width="100" height="8" rx="2" fill="#fff"/>
+                        <rect x="220" y="64" width="75" height="5" rx="1" fill="#aaa"/>
+                        <rect x="220" y="73" width="85" height="5" rx="1" fill="#aaa"/>
+                        <text x="245" y="95" font-size="8" fill="#4ade80" font-family="system-ui" font-weight="600">Sharp HiDPI</text>
+                    </g>
+                    <!-- G logo on screen -->
+                    <text x="340" y="108" font-size="16" fill="#4a9eff" font-weight="bold" font-family="system-ui" opacity="0.8">G</text>
+                    <!-- Stand -->
+                    <path d="M175 125 L180 145 L220 145 L225 125" fill="#1a1a24"/>
+                    <ellipse cx="200" cy="148" rx="35" ry="6" fill="#1a1a24"/>
+                    <!-- RGB accent -->
+                    <path d="M50 115 Q200 88 350 115" stroke="url(#rgbGrad)" stroke-width="2" stroke-linecap="round"/>
+                    <!-- Gradients -->
+                    <defs>
+                        <linearGradient id="screenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#1a1a2e"/>
+                            <stop offset="100%" stop-color="#0f0f1a"/>
+                        </linearGradient>
+                        <linearGradient id="rgbGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#00d4ff"/>
+                            <stop offset="50%" stop-color="#a855f7"/>
+                            <stop offset="100%" stop-color="#ff6b6b"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+
                 <h1>G9 Helper</h1>
-                <p class="tagline">Crisp HiDPI scaling for Samsung Odyssey G9 and other large monitors. Free and open source.</p>
+                <p class="tagline">Enable crisp HiDPI (Retina) scaling on Samsung Odyssey G9 and other large monitors. Free and open source for macOS.</p>
 
                 <a href="https://github.com/knightynite/HiDPIVirtualDisplay/raw/main/releases/G9.Helper-v1.0.0.dmg" class="download-btn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
@@ -347,38 +390,37 @@
                     <span class="version-badge">v1.0.0</span>
                     macOS 12+ | Apple Silicon & Intel | 1.4 MB
                 </div>
-
-                <div class="install-steps">
-                    <h3>Installation</h3>
-                    <div class="steps-row">
-                        <div class="step"><span class="step-num">1</span><span>Open the DMG</span></div>
-                        <div class="step"><span class="step-num">2</span><span>Drag to Applications</span></div>
-                        <div class="step"><span class="step-num">3</span><span>Launch from menu bar</span></div>
-                    </div>
-                </div>
-
-                <div class="security-note">
-                    <strong>First launch:</strong> Right-click the app, select "Open", then click "Open" in the dialog. This is required for apps outside the App Store.
-                </div>
             </div>
 
             <div class="info-panel">
+                <div class="info-section">
+                    <h3>Quick Install</h3>
+                    <div class="steps-row">
+                        <div class="step"><span class="step-num">1</span><span>Open DMG</span></div>
+                        <div class="step"><span class="step-num">2</span><span>Drag to Apps</span></div>
+                        <div class="step"><span class="step-num">3</span><span>Launch</span></div>
+                    </div>
+                    <div class="security-note">
+                        <strong>First launch:</strong> Right-click app, select "Open", click "Open" in dialog.
+                    </div>
+                </div>
+
                 <div class="info-section">
                     <h3>Compatibility</h3>
                     <div class="compat-row">
                         <div class="compat-item">
                             <h4>macOS</h4>
-                            <p>12 Monterey or later</p>
-                            <span class="status full">12 - 15</span>
+                            <p>12+</p>
+                            <span class="status full">Monterey - Sequoia</span>
                         </div>
                         <div class="compat-item">
                             <h4>Apple Silicon</h4>
-                            <p>M1, M2, M3, M4</p>
+                            <p>M1 - M4</p>
                             <span class="status full">Full Support</span>
                         </div>
                         <div class="compat-item">
                             <h4>Intel</h4>
-                            <p>2018 or newer</p>
+                            <p>2018+</p>
                             <span class="status partial">Limited</span>
                         </div>
                     </div>
@@ -388,44 +430,23 @@
                     <h3>Supported Monitors</h3>
                     <table class="monitors-table">
                         <thead>
-                            <tr>
-                                <th>Monitor</th>
-                                <th>Native</th>
-                                <th>HiDPI</th>
-                            </tr>
+                            <tr><th>Monitor</th><th>Native</th><th>HiDPI</th></tr>
                         </thead>
                         <tbody>
-                            <tr>
-                                <td>Samsung G9 57"</td>
-                                <td>7680x2160</td>
-                                <td>5120x1440 <span class="recommended">*</span></td>
-                            </tr>
-                            <tr>
-                                <td>Samsung G9 49"</td>
-                                <td>5120x1440</td>
-                                <td>3840x1080 <span class="recommended">*</span></td>
-                            </tr>
-                            <tr>
-                                <td>34" Ultrawide</td>
-                                <td>3440x1440</td>
-                                <td>2560x1080</td>
-                            </tr>
-                            <tr>
-                                <td>4K Displays</td>
-                                <td>3840x2160</td>
-                                <td>2560x1440 <span class="recommended">*</span></td>
-                            </tr>
+                            <tr><td>Samsung G9 57"</td><td>7680x2160</td><td>5120x1440 <span class="recommended">*</span></td></tr>
+                            <tr><td>Samsung G9 49"</td><td>5120x1440</td><td>3840x1080 <span class="recommended">*</span></td></tr>
+                            <tr><td>34" Ultrawide</td><td>3440x1440</td><td>2560x1080</td></tr>
+                            <tr><td>4K Displays</td><td>3840x2160</td><td>2560x1440 <span class="recommended">*</span></td></tr>
                         </tbody>
                     </table>
                 </div>
 
-                <div class="info-section" style="flex: 1;">
-                    <h3>Limitations</h3>
-                    <ul style="font-size: 0.8rem; color: var(--text-muted); margin-left: 15px; line-height: 1.8;">
-                        <li>Refresh rate depends on resolution and hardware</li>
+                <div class="info-section">
+                    <h3>Notes</h3>
+                    <ul class="notes-list">
+                        <li>120Hz confirmed working (hardware dependent)</li>
                         <li>HDR may not work in mirrored mode</li>
-                        <li>Base M-chips: max 6144px horizontal</li>
-                        <li>Pro/Max/Ultra: full 7680px support</li>
+                        <li>Base M-chips: max 6144px | Pro/Max/Ultra: 7680px+</li>
                     </ul>
                 </div>
             </div>
@@ -433,8 +454,8 @@
 
         <footer>
             <div>
-                <a href="https://github.com/knightynite/HiDPIVirtualDisplay" target="_blank">GitHub</a>
-                <a href="https://github.com/knightynite/HiDPIVirtualDisplay/blob/main/LICENSE" target="_blank">MIT License</a>
+                <a href="https://github.com/knightynite/HiDPIVirtualDisplay">GitHub</a>
+                <a href="https://github.com/knightynite/HiDPIVirtualDisplay/blob/main/LICENSE">MIT License</a>
                 <a href="mailto:g9helper@alcybr.com">g9helper@alcybr.com</a>
             </div>
             <div class="footer-right">
