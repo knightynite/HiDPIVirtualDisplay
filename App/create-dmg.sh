@@ -57,7 +57,7 @@ UNINSTALL
 
 SUPPORT
 If you find this useful, consider buying me a coffee:
-https://buymeacoffee.com/knightynite
+https://buymeacoffee.com/alcybr
 
 More info: https://github.com/knightynite/HiDPIVirtualDisplay
 

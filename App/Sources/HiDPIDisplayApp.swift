@@ -124,7 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kAutoRestoreKey = "autoRestoreOnCrash"
 
     // Donation link
-    private let donationURL = "https://buymeacoffee.com/knightynite"
+    private let donationURL = "https://buymeacoffee.com/alcybr"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("App launched")
