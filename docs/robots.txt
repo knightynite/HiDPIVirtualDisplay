@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://knightynite.github.io/HiDPIVirtualDisplay/sitemap.xml
