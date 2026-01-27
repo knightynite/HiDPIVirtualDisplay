@@ -1,24 +1,91 @@
 // VirtualDisplayManager.m
 // Implementation of virtual display creation using private CoreGraphics APIs
+// Compiled with -fno-objc-arc - uses manual retain/release
 
 #import "VirtualDisplayManager.h"
 #import "CGVirtualDisplayPrivate.h"
+#import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 
-@interface VirtualDisplayManager ()
-// Store just one virtual display at a time
-@property (nonatomic, strong) CGVirtualDisplay *currentDisplay;
-@property (nonatomic, assign) CGDirectDisplayID currentDisplayID;
-// Keep reference to old display during cleanup to prevent premature deallocation
-@property (nonatomic, strong) CGVirtualDisplay *pendingCleanupDisplay;
+// Global array to retain windows that appear during display operations
+// This prevents the CGVirtualDisplay framework's internal windows from being over-released
+static NSMutableArray *_retainedWindows = nil;
+static id _windowObserver = nil;
+
+@interface VirtualDisplayManager () {
+    CGVirtualDisplay *_display;
+    CGVirtualDisplayDescriptor *_descriptor;
+    CGVirtualDisplaySettings *_settings;
+    CGVirtualDisplayMode *_mode;
+    NSArray *_modesArray;
+    NSString *_displayName;
+    CGDirectDisplayID _currentDisplayID;
+}
 @end
 
 @implementation VirtualDisplayManager
+
+// Helper function to retain a window if not already retained
+static void retainWindowIfNeeded(NSWindow *window) {
+    if (window && ![_retainedWindows containsObject:window]) {
+        [window retain];
+        [_retainedWindows addObject:window];
+        NSLog(@"VDM: Retained window: %p (class: %@, title: %@)",
+              window, [window class], [window title] ?: @"<untitled>");
+    }
+}
+
++ (void)initialize {
+    if (self == [VirtualDisplayManager class]) {
+        // Initialize the retained windows array
+        _retainedWindows = [[NSMutableArray alloc] init];
+        [_retainedWindows retain];
+        NSLog(@"VDM: Window retention array initialized");
+
+        // Observe multiple window notifications to catch framework-created windows
+        NSArray *notifications = @[
+            NSWindowDidBecomeMainNotification,
+            NSWindowDidBecomeKeyNotification,
+            NSWindowDidUpdateNotification,
+            NSWindowDidChangeScreenNotification,
+            NSWindowDidExposeNotification
+        ];
+
+        for (NSNotificationName notifName in notifications) {
+            [[NSNotificationCenter defaultCenter]
+                addObserverForName:notifName
+                object:nil
+                queue:nil
+                usingBlock:^(NSNotification *notification) {
+                    retainWindowIfNeeded(notification.object);
+                }];
+        }
+
+        // Also prevent windows from being released when they close
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSWindowWillCloseNotification
+            object:nil
+            queue:nil
+            usingBlock:^(NSNotification *notification) {
+                NSWindow *window = notification.object;
+                if (window) {
+                    // Extra retain to counteract the close release
+                    [window retain];
+                    NSLog(@"VDM: Extra retain on closing window: %p", window);
+                }
+            }];
+
+        NSLog(@"VDM: Window observers installed");
+    }
+}
 
 + (instancetype)sharedManager {
     static VirtualDisplayManager *sharedManager = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         sharedManager = [[VirtualDisplayManager alloc] init];
+        [sharedManager retain];
+        NSLog(@"VDM: Shared manager created");
     });
     return sharedManager;
 }
@@ -26,10 +93,37 @@
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _currentDisplay = nil;
+        _display = nil;
+        _descriptor = nil;
+        _settings = nil;
+        _mode = nil;
+        _modesArray = nil;
+        _displayName = nil;
         _currentDisplayID = kCGNullDirectDisplay;
+
+        // Retain all existing windows to prevent crash from framework window over-release
+        for (NSWindow *window in [NSApp windows]) {
+            retainWindowIfNeeded(window);
+        }
+
+        // Periodically scan for new windows (catches any created without notifications)
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSTimer scheduledTimerWithTimeInterval:2.0
+                                            repeats:YES
+                                              block:^(NSTimer *timer) {
+                for (NSWindow *window in [NSApp windows]) {
+                    retainWindowIfNeeded(window);
+                }
+            }];
+        });
+
+        NSLog(@"VDM: Manager initialized");
     }
     return self;
+}
+
+- (CGDirectDisplayID)currentDisplayID {
+    return _currentDisplayID;
 }
 
 - (CGDirectDisplayID)createVirtualDisplayWithWidth:(unsigned int)width
@@ -39,137 +133,99 @@
                                               name:(NSString *)name
                                        refreshRate:(double)refreshRate {
 
-    NSLog(@"VDM: Creating virtual display: %ux%u @ %u PPI, HiDPI: %@, Refresh: %.0fHz",
-          width, height, ppi, hiDPI ? @"YES" : @"NO", refreshRate);
-
-    // Destroy any existing display first
-    if (self.currentDisplay != nil) {
-        NSLog(@"VDM: Destroying existing display %u before creating new one", self.currentDisplayID);
-        // Move to pending cleanup to prevent race condition with internal VirtualDisplayListener
-        // The old display will be released when we're done creating the new one
-        self.pendingCleanupDisplay = self.currentDisplay;
-        self.currentDisplay = nil;
-        self.currentDisplayID = kCGNullDirectDisplay;
-        // Give system time to clean up
-        [NSThread sleepForTimeInterval:0.5];
-    }
-
-    // Clean up pending display from previous iteration
-    if (self.pendingCleanupDisplay != nil) {
-        @autoreleasepool {
-            self.pendingCleanupDisplay = nil;
-        }
-    }
+    NSLog(@"VDM: ========== CREATE START ==========");
+    NSLog(@"VDM: %ux%u @ %u PPI, HiDPI=%@", width, height, ppi, hiDPI ? @"YES" : @"NO");
 
     @try {
-        // Wrap in autoreleasepool to ensure proper cleanup of temporary objects
-        @autoreleasepool {
-        // Create settings
+        // Create settings and retain
         CGVirtualDisplaySettings *settings = [[CGVirtualDisplaySettings alloc] init];
+        [settings retain];
         settings.hiDPI = hiDPI ? 1 : 0;
+        _settings = settings;
 
-        // Create descriptor
+        // Create descriptor and retain
         CGVirtualDisplayDescriptor *descriptor = [[CGVirtualDisplayDescriptor alloc] init];
-        descriptor.queue = dispatch_get_main_queue();  // Use main queue for stability
-        descriptor.name = name;
+        [descriptor retain];
+        descriptor.queue = dispatch_get_main_queue();
 
-        // Standard Apple display color profile (P3-ish)
+        _displayName = [[name copy] retain];
+        descriptor.name = _displayName;
+
         descriptor.whitePoint = CGPointMake(0.3125, 0.3291);
         descriptor.redPrimary = CGPointMake(0.6797, 0.3203);
         descriptor.greenPrimary = CGPointMake(0.2100, 0.7100);
         descriptor.bluePrimary = CGPointMake(0.1500, 0.0600);
 
-        // Calculate physical size in millimeters from pixels and PPI
         float widthInInches = (float)width / (float)ppi;
         float heightInInches = (float)height / (float)ppi;
         descriptor.sizeInMillimeters = CGSizeMake(widthInInches * 25.4f, heightInInches * 25.4f);
 
-        NSLog(@"VDM: Physical size: %.1f x %.1f mm",
-              descriptor.sizeInMillimeters.width,
-              descriptor.sizeInMillimeters.height);
-
-        // Set maximum pixel dimensions (framebuffer size)
         descriptor.maxPixelsWide = width;
         descriptor.maxPixelsHigh = height;
-
-        // Vendor/Product/Serial
         descriptor.vendorID = 0x1234;
         descriptor.productID = 0x5678;
-        descriptor.serialNum = arc4random();  // Random serial for uniqueness
-
-        // Don't set termination handler - it causes race conditions with the internal
-        // VirtualDisplayListener queue when the display is released, leading to crashes.
-        // The handler is called asynchronously and may try to access deallocated memory.
+        descriptor.serialNum = arc4random();
         descriptor.terminationHandler = nil;
 
-        // Calculate mode dimensions
+        _descriptor = descriptor;
+
         unsigned int modeWidth = hiDPI ? width / 2 : width;
         unsigned int modeHeight = hiDPI ? height / 2 : height;
+        NSLog(@"VDM: Mode: %ux%u", modeWidth, modeHeight);
 
-        NSLog(@"VDM: Mode resolution: %ux%u (logical), Framebuffer: %ux%u",
-              modeWidth, modeHeight, width, height);
-
-        // Create the display mode
         CGVirtualDisplayMode *mode = [[CGVirtualDisplayMode alloc] initWithWidth:modeWidth
                                                                           height:modeHeight
                                                                      refreshRate:refreshRate];
         if (!mode) {
-            NSLog(@"VDM: Failed to create display mode");
+            NSLog(@"VDM: ERROR - Failed to create mode");
             return kCGNullDirectDisplay;
         }
-        settings.modes = @[mode];
+        [mode retain];
+        _mode = mode;
 
-        // Create the virtual display
-        NSLog(@"VDM: Allocating CGVirtualDisplay...");
-        CGVirtualDisplay *display = [[CGVirtualDisplay alloc] initWithDescriptor:descriptor];
+        _modesArray = [@[_mode] retain];
+        _settings.modes = _modesArray;
+
+        NSLog(@"VDM: Creating display...");
+        CGVirtualDisplay *display = [[CGVirtualDisplay alloc] initWithDescriptor:_descriptor];
         if (!display) {
-            NSLog(@"VDM: Failed to create virtual display - initWithDescriptor returned nil");
+            NSLog(@"VDM: ERROR - Failed to create display");
             return kCGNullDirectDisplay;
         }
-        NSLog(@"VDM: CGVirtualDisplay allocated");
+        [display retain];
+        _display = display;
+        NSLog(@"VDM: Display created: %p", _display);
 
-        // Apply settings
         NSLog(@"VDM: Applying settings...");
-        BOOL settingsApplied = [display applySettings:settings];
-        if (!settingsApplied) {
-            NSLog(@"VDM: Failed to apply settings to virtual display");
+        BOOL applied = [_display applySettings:_settings];
+        if (!applied) {
+            NSLog(@"VDM: ERROR - Failed to apply settings");
             return kCGNullDirectDisplay;
         }
         NSLog(@"VDM: Settings applied");
 
-        // Get the display ID
-        NSLog(@"VDM: Getting display ID...");
-        CGDirectDisplayID displayID = display.displayID;
-        NSLog(@"VDM: Display ID is: %u", displayID);
+        CGDirectDisplayID displayID = _display.displayID;
+        _currentDisplayID = displayID;
+        NSLog(@"VDM: Display ID: %u", displayID);
 
         if (displayID == 0 || displayID == kCGNullDirectDisplay) {
-            NSLog(@"VDM: Invalid display ID returned");
+            NSLog(@"VDM: ERROR - Invalid display ID");
             return kCGNullDirectDisplay;
         }
 
-        // Store reference to keep it alive
-        NSLog(@"VDM: Storing display reference...");
-        self.currentDisplay = display;
-        self.currentDisplayID = displayID;
-        NSLog(@"VDM: Virtual display created successfully with ID: %u", displayID);
-
+        NSLog(@"VDM: ========== CREATE COMPLETE ==========");
         return displayID;
-        } // @autoreleasepool
 
     } @catch (NSException *exception) {
-        NSLog(@"VDM: Exception creating virtual display: %@", exception);
+        NSLog(@"VDM: EXCEPTION: %@", exception);
         return kCGNullDirectDisplay;
     }
 }
 
 - (CGDirectDisplayID)createG9VirtualDisplayWithScaledWidth:(unsigned int)scaledWidth
                                               scaledHeight:(unsigned int)scaledHeight {
-    // G9 57" preset - framebuffer = 2x the "looks like" resolution
-    unsigned int framebufferWidth = scaledWidth * 2;
-    unsigned int framebufferHeight = scaledHeight * 2;
-
-    return [self createVirtualDisplayWithWidth:framebufferWidth
-                                        height:framebufferHeight
+    return [self createVirtualDisplayWithWidth:scaledWidth * 2
+                                        height:scaledHeight * 2
                                            ppi:140
                                          hiDPI:YES
                                           name:@"G9 HiDPI Virtual"
@@ -179,165 +235,107 @@
 - (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
             toDisplay:(CGDirectDisplayID)targetDisplayID {
 
-    NSLog(@"VDM: Setting up mirror: %u -> %u", sourceDisplayID, targetDisplayID);
+    NSLog(@"VDM: Mirror %u -> %u", sourceDisplayID, targetDisplayID);
 
     CGDisplayConfigRef configRef;
     CGError err = CGBeginDisplayConfiguration(&configRef);
     if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to begin display configuration: %d", err);
+        NSLog(@"VDM: ERROR - Begin config failed: %d", err);
         return NO;
     }
 
-    // Set target to mirror source
     err = CGConfigureDisplayMirrorOfDisplay(configRef, targetDisplayID, sourceDisplayID);
     if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to configure mirror: %d", err);
+        NSLog(@"VDM: ERROR - Configure mirror failed: %d", err);
         CGCancelDisplayConfiguration(configRef);
         return NO;
     }
 
-    // Apply the configuration
     err = CGCompleteDisplayConfiguration(configRef, kCGConfigurePermanently);
     if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to complete display configuration: %d", err);
+        NSLog(@"VDM: ERROR - Complete config failed: %d", err);
         return NO;
     }
 
-    NSLog(@"VDM: Mirror configuration applied successfully");
+    NSLog(@"VDM: Mirror success");
     return YES;
 }
 
 - (BOOL)stopMirroringForDisplay:(CGDirectDisplayID)displayID {
-    NSLog(@"VDM: Stopping mirror for display: %u", displayID);
+    NSLog(@"VDM: Stop mirror for %u", displayID);
 
     CGDisplayConfigRef configRef;
     CGError err = CGBeginDisplayConfiguration(&configRef);
-    if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to begin display configuration: %d", err);
-        return NO;
-    }
+    if (err != kCGErrorSuccess) return NO;
 
-    // Pass kCGNullDirectDisplay to stop mirroring
     err = CGConfigureDisplayMirrorOfDisplay(configRef, displayID, kCGNullDirectDisplay);
     if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to stop mirror: %d", err);
         CGCancelDisplayConfiguration(configRef);
         return NO;
     }
 
     err = CGCompleteDisplayConfiguration(configRef, kCGConfigurePermanently);
-    if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to complete display configuration: %d", err);
-        return NO;
-    }
+    if (err != kCGErrorSuccess) return NO;
 
-    NSLog(@"VDM: Mirror stopped successfully");
+    NSLog(@"VDM: Stop mirror success");
     return YES;
 }
 
 - (void)destroyVirtualDisplay:(CGDirectDisplayID)displayID {
-    NSLog(@"VDM: Destroying virtual display: %u (current: %u)", displayID, self.currentDisplayID);
-    if (displayID == self.currentDisplayID) {
-        @autoreleasepool {
-            // Move to pending cleanup first to prevent race condition
-            self.pendingCleanupDisplay = self.currentDisplay;
-            self.currentDisplay = nil;
-            self.currentDisplayID = kCGNullDirectDisplay;
-            // Give internal queue time to finish
-            [NSThread sleepForTimeInterval:0.3];
-            // Now release the pending display
-            self.pendingCleanupDisplay = nil;
-        }
-        NSLog(@"VDM: Virtual display destroyed");
-    } else {
-        NSLog(@"VDM: Display ID mismatch, not destroying");
+    NSLog(@"VDM: destroyVirtualDisplay called for %u (NO-OP)", displayID);
+    if (displayID == _currentDisplayID) {
+        _currentDisplayID = kCGNullDirectDisplay;
     }
 }
 
 - (void)destroyAllVirtualDisplays {
-    NSLog(@"VDM: Destroying all virtual displays (current: %u)", self.currentDisplayID);
-    @autoreleasepool {
-        // Move to pending cleanup first to prevent race condition
-        if (self.currentDisplay != nil) {
-            self.pendingCleanupDisplay = self.currentDisplay;
-            self.currentDisplay = nil;
-        }
-        self.currentDisplayID = kCGNullDirectDisplay;
-        // Give internal queue time to finish
-        [NSThread sleepForTimeInterval:0.3];
-        // Now release the pending display
-        self.pendingCleanupDisplay = nil;
-    }
-    NSLog(@"VDM: All virtual displays destroyed");
+    NSLog(@"VDM: destroyAllVirtualDisplays called (NO-OP)");
+    _currentDisplayID = kCGNullDirectDisplay;
 }
 
 - (void)resetAllMirroring {
-    NSLog(@"VDM: Resetting all display mirroring...");
-
+    NSLog(@"VDM: resetAllMirroring called");
     CGDirectDisplayID displayList[32];
     uint32_t displayCount;
 
     CGError err = CGGetOnlineDisplayList(32, displayList, &displayCount);
-    if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to get display list: %d", err);
-        return;
-    }
+    if (err != kCGErrorSuccess) return;
 
-    // Find all displays that are currently mirroring something
     for (uint32_t i = 0; i < displayCount; i++) {
         CGDirectDisplayID displayID = displayList[i];
         CGDirectDisplayID mirrorOf = CGDisplayMirrorsDisplay(displayID);
-
         if (mirrorOf != kCGNullDirectDisplay) {
-            NSLog(@"VDM: Display %u is mirroring %u, stopping...", displayID, mirrorOf);
             [self stopMirroringForDisplay:displayID];
         }
     }
-
-    NSLog(@"VDM: All mirroring reset complete");
+    NSLog(@"VDM: Reset mirroring complete");
 }
 
 - (NSArray<NSDictionary *> *)listAllDisplays {
     NSMutableArray *displays = [NSMutableArray array];
-
     CGDirectDisplayID displayList[32];
     uint32_t displayCount;
 
-    CGError err = CGGetOnlineDisplayList(32, displayList, &displayCount);
-    if (err != kCGErrorSuccess) {
-        NSLog(@"VDM: Failed to get display list: %d", err);
+    if (CGGetOnlineDisplayList(32, displayList, &displayCount) != kCGErrorSuccess) {
         return displays;
     }
 
     for (uint32_t i = 0; i < displayCount; i++) {
         CGDirectDisplayID displayID = displayList[i];
-
         CGDisplayModeRef mode = CGDisplayCopyDisplayMode(displayID);
-        size_t width = CGDisplayModeGetWidth(mode);
-        size_t height = CGDisplayModeGetHeight(mode);
-        double refreshRate = CGDisplayModeGetRefreshRate(mode);
-        CGDisplayModeRelease(mode);
-
-        CGSize physicalSize = CGDisplayScreenSize(displayID);
-        BOOL isMain = CGDisplayIsMain(displayID);
-        BOOL isBuiltin = CGDisplayIsBuiltin(displayID);
-        CGDirectDisplayID mirrorOf = CGDisplayMirrorsDisplay(displayID);
-        BOOL isVirtual = (displayID == self.currentDisplayID);
-
-        [displays addObject:@{
-            @"id": @(displayID),
-            @"width": @(width),
-            @"height": @(height),
-            @"refreshRate": @(refreshRate),
-            @"physicalWidth": @(physicalSize.width),
-            @"physicalHeight": @(physicalSize.height),
-            @"isMain": @(isMain),
-            @"isBuiltin": @(isBuiltin),
-            @"mirrorOf": @(mirrorOf),
-            @"isVirtual": @(isVirtual)
-        }];
+        if (mode) {
+            [displays addObject:@{
+                @"id": @(displayID),
+                @"width": @(CGDisplayModeGetWidth(mode)),
+                @"height": @(CGDisplayModeGetHeight(mode)),
+                @"isMain": @(CGDisplayIsMain(displayID)),
+                @"isBuiltin": @(CGDisplayIsBuiltin(displayID)),
+                @"mirrorOf": @(CGDisplayMirrorsDisplay(displayID)),
+                @"isVirtual": @(displayID == _currentDisplayID)
+            }];
+            CGDisplayModeRelease(mode);
+        }
     }
-
     return displays;
 }
 
@@ -346,7 +344,7 @@
 }
 
 - (BOOL)isVirtualDisplay:(CGDirectDisplayID)displayID {
-    return displayID == self.currentDisplayID;
+    return displayID == _currentDisplayID;
 }
 
 @end

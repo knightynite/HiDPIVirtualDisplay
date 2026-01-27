@@ -22,12 +22,20 @@ echo "Building ${APP_NAME}..."
 mkdir -p "${MACOS}"
 mkdir -p "${RESOURCES}"
 
-# Compile the app
-echo "Compiling..."
+# Compile Objective-C file WITHOUT ARC
+echo "Compiling Objective-C (no ARC)..."
+clang -c -fno-objc-arc -fobjc-arc-exceptions \
+    -framework Foundation \
+    -framework CoreGraphics \
+    ${OBJC_SOURCES} \
+    -o "${BUILD_DIR}/VirtualDisplayManager.o"
+
+# Compile Swift and link with pre-compiled Objective-C
+echo "Compiling Swift and linking..."
 swiftc \
     -parse-as-library \
     ${SWIFT_SOURCES} \
-    ${OBJC_SOURCES} \
+    "${BUILD_DIR}/VirtualDisplayManager.o" \
     -import-objc-header ${BRIDGING_HEADER} \
     -framework Foundation \
     -framework AppKit \

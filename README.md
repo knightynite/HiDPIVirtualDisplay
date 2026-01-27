@@ -1,6 +1,12 @@
 # G9 Helper
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2012%2B-lightgrey.svg)](https://www.apple.com/macos/)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-orange.svg)](https://buymeacoffee.com/knightynite)
+
 A lightweight macOS menu bar utility that unlocks crisp HiDPI (Retina) scaling on Samsung Odyssey G9 and other large monitors.
+
+**Free and open source** - if you find it useful, consider [buying me a coffee](https://buymeacoffee.com/knightynite)!
 
 ## The Problem
 
@@ -26,7 +32,7 @@ G9 Helper creates a virtual display with HiDPI enabled at your preferred resolut
 
 ### Download
 
-1. Grab the latest `G9.Helper.dmg` from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
+1. Download [`G9.Helper-v1.0.0.dmg`](releases/G9.Helper-v1.0.0.dmg) (or check [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases) for latest)
 2. Open the DMG and drag **G9 Helper** to **Applications**
 3. Launch from Applications or Spotlight
 4. Look for the display icon in your menu bar
@@ -71,6 +77,34 @@ To disable, click the menu bar icon and select **Disable HiDPI**.
 | 3840x1080 | 3840x1080 (recommended) |
 | Native 2x | 2560x720 |
 
+## Auto-Start & Crash Recovery
+
+The app includes built-in crash recovery. If enabled, your HiDPI settings will automatically restore after a crash or system restart.
+
+### Enable Auto-Start (Recommended)
+
+```bash
+cd /path/to/HiDPIVirtualDisplay/App
+./install-launchd.sh install
+```
+
+This will:
+- Start G9 Helper automatically at login
+- Auto-restart if the app crashes
+- Automatically restore your last HiDPI preset
+
+### Disable Auto-Start
+
+```bash
+./install-launchd.sh uninstall
+```
+
+### Check Status
+
+```bash
+./install-launchd.sh status
+```
+
 ## Requirements
 
 - macOS 12.0 Monterey or later
@@ -78,6 +112,18 @@ To disable, click the menu bar icon and select **Disable HiDPI**.
   - Base chips support up to 6144px horizontal
   - Pro/Max/Ultra support 7680px+ horizontal
 - Intel Macs may work with limitations
+
+## Known Issues
+
+### Periodic Crashes
+
+The app uses private macOS APIs for virtual display creation. These APIs have internal memory management that can occasionally cause crashes. The app is designed to handle this gracefully:
+
+1. **Auto-restart**: With the launch agent installed, crashes restart automatically within seconds
+2. **State preservation**: Your preset is saved and restored on restart
+3. **Transparent recovery**: Most users won't notice the brief restart
+
+This is a known limitation of using private APIs. The display configuration persists through crashes.
 
 ## Limitations
 
@@ -88,9 +134,34 @@ To disable, click the menu bar icon and select **Disable HiDPI**.
 
 ## Uninstall
 
-1. Click the G9 Helper menu bar icon and select **Quit**
-2. Drag **G9 Helper.app** from Applications to Trash
-3. Empty Trash
+1. Remove auto-start (if enabled):
+   ```bash
+   ./install-launchd.sh uninstall
+   ```
+2. Click the G9 Helper menu bar icon and select **Quit**
+3. Drag **G9 Helper.app** from Applications to Trash
+4. Empty Trash
+
+## Project Structure
+
+```
+HiDPIVirtualDisplay/
+├── App/                          # Menu bar GUI application
+│   ├── Sources/                  # Swift & Objective-C source
+│   │   ├── HiDPIDisplayApp.swift # Main app with SwiftUI
+│   │   ├── VirtualDisplayManager.m # Display management (no-ARC)
+│   │   └── CGVirtualDisplayPrivate.h # Private API declarations
+│   ├── Resources/                # App icon
+│   ├── launch-agent/             # launchd auto-start plist
+│   ├── build.sh                  # Build script
+│   ├── install-launchd.sh        # Auto-start installer
+│   └── Info.plist                # App bundle config
+├── Sources/                      # Command-line tool (alternative)
+│   ├── main.swift                # CLI entry point
+│   └── VirtualDisplayManager.*   # Shared display management
+├── Makefile                      # CLI build system
+└── README.md
+```
 
 ## Troubleshooting
 
@@ -102,6 +173,11 @@ To disable, click the menu bar icon and select **Disable HiDPI**.
 
 **Virtual display persists after quit**: Restart your Mac to clear orphaned displays.
 
+**Frequent crashes**: Install the launch agent for automatic recovery:
+```bash
+./install-launchd.sh install
+```
+
 ## How It Works
 
 The app leverages macOS private APIs to create virtual displays with custom properties:
@@ -111,12 +187,25 @@ The app leverages macOS private APIs to create virtual displays with custom prop
 3. macOS renders at 2x resolution into the virtual framebuffer
 4. The framebuffer is scaled to your monitor's native resolution
 
+## Technical Notes
+
+- Built with Swift (UI) and Objective-C (display management)
+- VirtualDisplayManager compiled without ARC (`-fno-objc-arc`) for manual memory control
+- Window tracking to prevent framework-related crashes
+- UserDefaults for state persistence across crashes
+
+## Support
+
+If G9 Helper improves your workflow, consider supporting development:
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-orange.svg?style=for-the-badge)](https://buymeacoffee.com/knightynite)
+
 ## License
 
-MIT License. Use at your own risk.
+MIT License - Free software, use at your own risk.
 
 This software uses undocumented macOS APIs that may change or break with future updates.
 
 ---
 
-Created by AL in Dallas
+Created with ❤️ by AL in Dallas

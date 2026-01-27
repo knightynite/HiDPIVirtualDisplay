@@ -113,11 +113,18 @@ struct HiDPIDisplayApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem?
-    var currentPresetName = ""
-    var isActive = false
-    var currentVirtualID: CGDirectDisplayID = 0
-    var pendingTimer: Timer?
+    private var statusItem: NSStatusItem?
+    private var currentPresetName = ""
+    private var isActive = false
+    private var currentVirtualID: CGDirectDisplayID = 0
+
+    // State persistence keys
+    private let kLastPresetKey = "lastActivePreset"
+    private let kWasCrashKey = "wasRunningWhenCrashed"
+    private let kAutoRestoreKey = "autoRestoreOnCrash"
+
+    // Donation link
+    private let donationURL = "https://buymeacoffee.com/knightynite"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("App launched")
@@ -138,8 +145,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Check for existing virtual display
         checkCurrentState()
 
+        // Check if we should auto-restore after a crash
+        checkAndRestoreFromCrash()
+
         // Build menu
         rebuildMenu()
+
+        // Mark that the app is running (for crash detection)
+        UserDefaults.standard.set(true, forKey: kWasCrashKey)
+    }
+
+    func checkAndRestoreFromCrash() {
+        let wasRunning = UserDefaults.standard.bool(forKey: kWasCrashKey)
+        let autoRestore = UserDefaults.standard.bool(forKey: kAutoRestoreKey)
+
+        // Default to auto-restore enabled
+        if UserDefaults.standard.object(forKey: kAutoRestoreKey) == nil {
+            UserDefaults.standard.set(true, forKey: kAutoRestoreKey)
+        }
+
+        if wasRunning && autoRestore {
+            if let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey),
+               !lastPreset.isEmpty {
+                debugLog("Detected restart after crash, auto-restoring preset: \(lastPreset)")
+
+                // Delay restoration to let the system settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.restorePreset(lastPreset)
+                }
+            }
+        }
+
+        // Clear the crash flag (will be set again when app is running)
+        UserDefaults.standard.set(false, forKey: kWasCrashKey)
+    }
+
+    func restorePreset(_ presetName: String) {
+        guard let config = presetConfigs[presetName] else {
+            debugLog("ERROR: Unknown preset for restore: \(presetName)")
+            return
+        }
+
+        debugLog(">>> Auto-restoring preset: \(presetName)")
+
+        StatusWindowController.shared.show(message: "Restoring display configuration...")
+
+        let manager = VirtualDisplayManager.shared()
+        manager.resetAllMirroring()
+        manager.destroyAllVirtualDisplays()
+        currentVirtualID = 0
+        isActive = false
+        currentPresetName = ""
+
+        // Schedule creation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            autoreleasepool {
+                self?.createVirtualDisplayAsync(config: config)
+            }
+        }
+
+        // Re-save the preset since we're using it
+        saveCurrentPreset(presetName)
+    }
+
+    func saveCurrentPreset(_ presetName: String) {
+        UserDefaults.standard.set(presetName, forKey: kLastPresetKey)
+        UserDefaults.standard.set(true, forKey: kWasCrashKey)
+        debugLog("Saved preset for crash recovery: \(presetName)")
+    }
+
+    func clearSavedPreset() {
+        UserDefaults.standard.removeObject(forKey: kLastPresetKey)
+        UserDefaults.standard.set(false, forKey: kWasCrashKey)
+        debugLog("Cleared saved preset")
     }
 
     func cleanupStaleState() {
@@ -156,7 +234,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        pendingTimer?.invalidate()
         disableHiDPISync()
     }
 
@@ -257,10 +334,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
-        alert.informativeText = "Version 1.0.0\n\nUnlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.\n\nCreated by AL in Dallas"
+        alert.informativeText = """
+            Version 1.0.0
+
+            Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
+
+            This is free software. If you find it useful, consider buying me a coffee!
+
+            Created by AL in Dallas
+            """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.addButton(withTitle: "Buy Me a Coffee ☕")
+
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            if let url = URL(string: donationURL) {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     func addPresetItem(to menu: NSMenu, preset: String, title: String) {
@@ -274,15 +366,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let presetName = sender.representedObject as? String else { return }
         debugLog(">>> Applying preset: \(presetName)")
 
-        // Get preset config
         guard let config = presetConfigs[presetName] else {
             debugLog("ERROR: Unknown preset \(presetName)")
             return
         }
-
-        // Cancel any pending operations
-        pendingTimer?.invalidate()
-        pendingTimer = nil
 
         // Show status window
         StatusWindowController.shared.show(message: "Preparing display configuration...")
@@ -296,10 +383,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isActive = false
         currentPresetName = ""
 
-        // Schedule creation after a delay to let system settle
+        // Save the preset for crash recovery
+        saveCurrentPreset(presetName)
+
+        // Schedule creation after a delay using DispatchQueue instead of Timer
+        // This gives us better control over autorelease pool behavior
         debugLog("Scheduling display creation in 1.5 seconds...")
-        pendingTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
-            self?.createVirtualDisplayAsync(config: config)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            autoreleasepool {
+                self?.createVirtualDisplayAsync(config: config)
+            }
         }
     }
 
@@ -317,6 +410,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         currentVirtualID = 0
         isActive = false
         currentPresetName = ""
+
+        // Clear saved preset so we don't auto-restore on next launch
+        clearSavedPreset()
 
         debugLog("HiDPI disabled")
     }
@@ -339,7 +435,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         StatusWindowController.shared.updateStatus("Creating virtual display...")
 
-        // Create virtual display on main thread
+        // Create virtual display
         let manager = VirtualDisplayManager.shared()
         debugLog("Calling createVirtualDisplay...")
         let virtualID = manager.createVirtualDisplay(
@@ -366,10 +462,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         StatusWindowController.shared.updateStatus("Configuring display mirror...")
 
-        // Wait for display to initialize using Timer (non-blocking)
+        // Wait for display to initialize
         debugLog("Scheduling mirror in 3 seconds...")
-        pendingTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-            self?.performMirror(virtualID: virtualID, externalID: externalID, config: config)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            autoreleasepool {
+                self?.performMirror(virtualID: virtualID, externalID: externalID, config: config)
+            }
         }
     }
 
@@ -439,9 +537,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func disableHiDPIAction() {
-        pendingTimer?.invalidate()
-        pendingTimer = nil
-
         StatusWindowController.shared.show(message: "Disabling HiDPI...")
         disableHiDPISync()
         rebuildMenu()
@@ -453,7 +548,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func quitApp() {
-        pendingTimer?.invalidate()
         disableHiDPISync()
         NSApp.terminate(nil)
     }

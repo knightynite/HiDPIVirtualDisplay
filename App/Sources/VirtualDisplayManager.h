@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Shared instance
 + (instancetype)sharedManager;
 
+/// Currently active virtual display ID (or kCGNullDirectDisplay if none)
+@property (nonatomic, readonly) CGDirectDisplayID currentDisplayID;
+
 /// Create a virtual display with specified parameters
 /// @param width Width in pixels
 /// @param height Height in pixels
