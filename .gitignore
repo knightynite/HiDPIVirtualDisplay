@@ -1,8 +1,11 @@
 # Build artifacts
 build/
 *.app
-*.dmg
 *.dSYM/
+*.o
+
+# DMGs in build folders (but not releases/)
+App/build/*.dmg
 
 # Xcode
 *.xcodeproj/
@@ -31,3 +34,9 @@ DerivedData/
 .idea/
 .vscode/
 *.sublime-*
+
+# Logs
+*.log
+
+# User-specific
+.claude/

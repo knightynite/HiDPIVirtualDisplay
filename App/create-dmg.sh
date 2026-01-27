@@ -26,7 +26,7 @@ ln -s /Applications "${DMG_DIR}/Applications"
 
 # Create README
 cat > "${DMG_DIR}/README.txt" << 'EOF'
-G9 Helper v1.0.0
+G9 Helper v1.0.0 - Free Software
 
 Unlock crisp HiDPI (Retina) scaling on Samsung Odyssey G9
 and other large monitors.
@@ -46,14 +46,23 @@ USAGE
 3. Choose a resolution preset
 4. Wait a few seconds for configuration
 
+AUTO-START (Recommended)
+For automatic startup and crash recovery, run in Terminal:
+  cd /path/to/HiDPIVirtualDisplay/App
+  ./install-launchd.sh install
+
 UNINSTALL
 1. Click the menu bar icon and select "Quit"
 2. Drag the app from Applications to Trash
 
+SUPPORT
+If you find this useful, consider buying me a coffee:
+https://buymeacoffee.com/knightynite
+
 More info: https://github.com/knightynite/HiDPIVirtualDisplay
 
 ---
-Created by AL in Dallas
+Created with love by AL in Dallas
 EOF
 
 # Create the DMG
