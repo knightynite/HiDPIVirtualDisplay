@@ -127,7 +127,7 @@ This is a known limitation of using private APIs. The display configuration pers
 
 ## Limitations
 
-- Refresh rate limited to 60Hz when mirrored
+- Refresh rate depends on resolution and hardware configuration
 - HDR may not function in mirrored mode
 - May require re-enabling after sleep/wake cycles
 - Uses private macOS APIs (may break with future updates)
