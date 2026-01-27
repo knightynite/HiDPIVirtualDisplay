@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G9 Helper - HiDPI Scaling for Large Monitors</title>
+    <meta name="description" content="Free macOS utility that enables crisp HiDPI (Retina) scaling on Samsung Odyssey G9 and other large monitors.">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
+    <style>
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-card: #12121a;
+            --accent: #4a9eff;
+            --accent-hover: #6bb3ff;
+            --text: #ffffff;
+            --text-muted: #8a8a9a;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --border: #2a2a3a;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Header */
+        header {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            margin-left: 25px;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--accent);
+        }
+
+        /* Hero */
+        .hero {
+            text-align: center;
+            padding: 80px 0 60px;
+        }
+
+        .hero-icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 15px;
+            background: linear-gradient(135deg, #fff 0%, #4a9eff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .tagline {
+            font-size: 1.3rem;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+        }
+
+        .hero .subtitle {
+            font-size: 1rem;
+            color: var(--text-muted);
+            margin-bottom: 40px;
+        }
+
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: var(--accent);
+            color: white;
+            padding: 18px 40px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-size: 1.2rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 20px rgba(74, 158, 255, 0.3);
+        }
+
+        .download-btn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 30px rgba(74, 158, 255, 0.4);
+        }
+
+        .download-info {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .version-badge {
+            display: inline-block;
+            background: var(--bg-card);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-right: 10px;
+        }
+
+        /* Sections */
+        section {
+            padding: 60px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        section h2 {
+            font-size: 2rem;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        /* Features Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 25px;
+            margin-top: 40px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            padding: 30px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .feature-card .icon {
+            font-size: 2rem;
+            margin-bottom: 15px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Installation Steps */
+        .steps {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .step {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 35px;
+            padding: 25px;
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .step-number {
+            flex-shrink: 0;
+            width: 45px;
+            height: 45px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.2rem;
+        }
+
+        .step-content h3 {
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+        }
+
+        .step-content p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .step-content code {
+            background: var(--bg-dark);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.9rem;
+        }
+
+        /* Security Note */
+        .security-note {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 1px solid #fbbf24;
+            border-radius: 16px;
+            padding: 30px;
+            margin: 40px 0;
+        }
+
+        .security-note h3 {
+            color: var(--warning);
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .security-note p {
+            color: var(--text-muted);
+            margin-bottom: 15px;
+        }
+
+        .security-note ol {
+            color: var(--text);
+            margin-left: 20px;
+        }
+
+        .security-note li {
+            margin-bottom: 8px;
+        }
+
+        /* Compatibility */
+        .compat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .compat-card {
+            background: var(--bg-card);
+            padding: 25px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            text-align: center;
+        }
+
+        .compat-card .icon {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .compat-card h4 {
+            margin-bottom: 8px;
+        }
+
+        .compat-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .compat-card .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            margin-top: 10px;
+        }
+
+        .status.full { background: rgba(74, 222, 128, 0.2); color: var(--success); }
+        .status.partial { background: rgba(251, 191, 36, 0.2); color: var(--warning); }
+
+        /* Monitors Table */
+        .monitors-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 30px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .monitors-table th,
+        .monitors-table td {
+            padding: 15px 20px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .monitors-table th {
+            background: var(--bg-dark);
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .monitors-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .recommended {
+            color: var(--success);
+            font-size: 0.85rem;
+        }
+
+        /* Contact */
+        .contact-section {
+            text-align: center;
+        }
+
+        .contact-card {
+            display: inline-block;
+            background: var(--bg-card);
+            padding: 40px 60px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            margin-top: 30px;
+        }
+
+        .contact-card .icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        .contact-card a {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 1.2rem;
+        }
+
+        .contact-card a:hover {
+            text-decoration: underline;
+        }
+
+        .contact-card p {
+            color: var(--text-muted);
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        .footer-links {
+            margin-bottom: 20px;
+        }
+
+        .footer-links a {
+            margin: 0 15px;
+        }
+
+        .coffee-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #ffdd00;
+            color: #000;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-top: 20px;
+            transition: transform 0.2s;
+        }
+
+        .coffee-btn:hover {
+            transform: scale(1.05);
+            text-decoration: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 2rem; }
+            .hero .tagline { font-size: 1.1rem; }
+            .download-btn { padding: 15px 30px; font-size: 1rem; }
+            .step { flex-direction: column; }
+            .header-content { flex-direction: column; gap: 15px; }
+            .nav-links a { margin: 0 10px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="#" class="logo">G9 Helper</a>
+                <nav class="nav-links">
+                    <a href="#features">Features</a>
+                    <a href="#install">Install</a>
+                    <a href="#compatibility">Compatibility</a>
+                    <a href="#contact">Contact</a>
+                    <a href="https://github.com/knightynite/HiDPIVirtualDisplay" target="_blank">GitHub</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="container">
+                <div class="hero-icon">🖥️</div>
+                <h1>G9 Helper</h1>
+                <p class="tagline">Crisp HiDPI Scaling for Large Monitors</p>
+                <p class="subtitle">Free macOS utility for Samsung Odyssey G9 and other ultrawide displays</p>
+
+                <a href="https://github.com/knightynite/HiDPIVirtualDisplay/raw/main/releases/G9.Helper-v1.0.0.dmg" class="download-btn">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Download for macOS
+                </a>
+
+                <div class="download-info">
+                    <span class="version-badge">v1.0.0</span>
+                    <span>macOS 12+ • Apple Silicon & Intel • 1.4 MB</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <section id="features">
+            <div class="container">
+                <h2>Why G9 Helper?</h2>
+                <p style="text-align: center; color: var(--text-muted); max-width: 600px; margin: 0 auto;">
+                    macOS doesn't enable HiDPI on large monitors like the Samsung G9.
+                    G9 Helper fixes this by creating a virtual display with Retina rendering.
+                </p>
+
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="icon">✨</div>
+                        <h3>Crystal Clear Text</h3>
+                        <p>Enable true Retina rendering on any display. No more blurry scaled resolutions.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">⚡</div>
+                        <h3>One-Click Setup</h3>
+                        <p>Select your monitor, pick a preset, done. No terminal commands or config files.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">🔄</div>
+                        <h3>Auto-Recovery</h3>
+                        <p>Automatically restores your settings if the app restarts. Set it and forget it.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">🎯</div>
+                        <h3>Menu Bar App</h3>
+                        <p>Lives quietly in your menu bar. Quick access whenever you need to adjust.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Installation -->
+        <section id="install">
+            <div class="container">
+                <h2>Installation</h2>
+
+                <div class="steps">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <div class="step-content">
+                            <h3>Download & Open DMG</h3>
+                            <p>Click the download button above. Once downloaded, double-click <code>G9.Helper-v1.0.0.dmg</code> to open it.</p>
+                        </div>
+                    </div>
+
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <div class="step-content">
+                            <h3>Drag to Applications</h3>
+                            <p>Drag the <strong>G9 Helper</strong> app icon to the <strong>Applications</strong> folder shortcut in the DMG window.</p>
+                        </div>
+                    </div>
+
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <div class="step-content">
+                            <h3>Launch the App</h3>
+                            <p>Open G9 Helper from your Applications folder or use Spotlight (<code>Cmd + Space</code>, type "G9 Helper").</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="security-note">
+                    <h3>⚠️ First Launch - Security Warning</h3>
+                    <p>macOS will show a security warning because this app isn't from the App Store. This is normal for open-source software. To open it:</p>
+                    <p><strong>Option A (Easiest):</strong></p>
+                    <ol>
+                        <li>Right-click (or Control-click) on G9 Helper in Applications</li>
+                        <li>Select <strong>"Open"</strong> from the context menu</li>
+                        <li>Click <strong>"Open"</strong> in the dialog that appears</li>
+                    </ol>
+                    <p style="margin-top: 15px;"><strong>Option B (System Settings):</strong></p>
+                    <ol>
+                        <li>Open <strong>System Settings</strong> → <strong>Privacy & Security</strong></li>
+                        <li>Scroll down to the Security section</li>
+                        <li>Click <strong>"Open Anyway"</strong> next to the G9 Helper message</li>
+                    </ol>
+                </div>
+            </div>
+        </section>
+
+        <!-- Compatibility -->
+        <section id="compatibility">
+            <div class="container">
+                <h2>Compatibility</h2>
+
+                <div class="compat-grid">
+                    <div class="compat-card">
+                        <div class="icon">💻</div>
+                        <h4>macOS Version</h4>
+                        <p>macOS 12 Monterey or later</p>
+                        <span class="status full">macOS 12 - 15</span>
+                    </div>
+                    <div class="compat-card">
+                        <div class="icon">🍎</div>
+                        <h4>Apple Silicon</h4>
+                        <p>M1, M2, M3, M4 (all variants)</p>
+                        <span class="status full">Full Support</span>
+                    </div>
+                    <div class="compat-card">
+                        <div class="icon">🖥️</div>
+                        <h4>Intel Macs</h4>
+                        <p>2018 or newer recommended</p>
+                        <span class="status partial">Limited</span>
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 50px; margin-bottom: 20px;">Supported Monitors</h3>
+
+                <table class="monitors-table">
+                    <thead>
+                        <tr>
+                            <th>Monitor</th>
+                            <th>Native Resolution</th>
+                            <th>Recommended HiDPI</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Samsung Odyssey G9 57"</td>
+                            <td>7680 × 2160</td>
+                            <td>5120 × 1440 <span class="recommended">★ Recommended</span></td>
+                        </tr>
+                        <tr>
+                            <td>Samsung Odyssey G9 49"</td>
+                            <td>5120 × 1440</td>
+                            <td>3840 × 1080 <span class="recommended">★ Recommended</span></td>
+                        </tr>
+                        <tr>
+                            <td>34" Ultrawide</td>
+                            <td>3440 × 1440</td>
+                            <td>2560 × 1080</td>
+                        </tr>
+                        <tr>
+                            <td>4K Displays</td>
+                            <td>3840 × 2160</td>
+                            <td>2560 × 1440 <span class="recommended">★ Recommended</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3 style="margin-top: 50px; margin-bottom: 20px;">Known Limitations</h3>
+                <ul style="color: var(--text-muted); margin-left: 20px;">
+                    <li>Refresh rate limited to 60Hz when HiDPI mirroring is active</li>
+                    <li>HDR may not function in mirrored mode</li>
+                    <li>Apple Silicon base chips (M1/M2/M3/M4) support up to 6144px horizontal</li>
+                    <li>Pro/Max/Ultra chips support 7680px+ horizontal for full G9 57" support</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Contact / Feedback -->
+        <section id="contact" class="contact-section">
+            <div class="container">
+                <h2>Feedback & Support</h2>
+                <p style="color: var(--text-muted);">Have questions, found a bug, or want to suggest a feature?</p>
+
+                <div class="contact-card">
+                    <div class="icon">📧</div>
+                    <a href="mailto:g9helper@alcybr.com">g9helper@alcybr.com</a>
+                    <p>We typically respond within 24-48 hours</p>
+                </div>
+
+                <p style="margin-top: 30px; color: var(--text-muted);">
+                    You can also <a href="https://github.com/knightynite/HiDPIVirtualDisplay/issues" target="_blank">open an issue on GitHub</a> for bug reports.
+                </p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://github.com/knightynite/HiDPIVirtualDisplay" target="_blank">GitHub</a>
+                <a href="https://github.com/knightynite/HiDPIVirtualDisplay/blob/main/LICENSE" target="_blank">MIT License</a>
+                <a href="mailto:g9helper@alcybr.com">Contact</a>
+            </div>
+
+            <a href="https://buymeacoffee.com/alcybr" target="_blank" class="coffee-btn">
+                ☕ Buy Me a Coffee
+            </a>
+
+            <p style="margin-top: 30px;">
+                Made with ❤️ by AL in Dallas<br>
+                <small>© 2025 G9 Helper. Free and open source.</small>
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
