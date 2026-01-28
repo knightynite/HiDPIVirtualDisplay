@@ -424,9 +424,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Track if we're in the middle of setting up HiDPI (don't trigger cleanup during setup)
     private var isSettingUp = false
 
-    // Donation link
-    private let donationURL = "https://buymeacoffee.com/alcybr"
-
     // Display change observer
     private var displayObserver: Any?
     private var displayCheckTimer: Timer?
@@ -1009,24 +1006,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.5
+            Version 1.0.6
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
-
-            This is free software. If you find it useful, consider buying me a coffee!
 
             Created by AL in Dallas
             """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Buy Me a Coffee ☕")
-
-        let response = alert.runModal()
-        if response == .alertSecondButtonReturn {
-            if let url = URL(string: donationURL) {
-                NSWorkspace.shared.open(url)
-            }
-        }
+        alert.runModal()
     }
 
     func addPresetItem(to menu: NSMenu, preset: String, title: String) {
