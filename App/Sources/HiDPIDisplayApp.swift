@@ -8,6 +8,21 @@ import CoreGraphics
 
 func debugLog(_ message: String) {
     NSLog("HiDPI: %@", message)
+    // Also write to a file for easier debugging
+    let logFile = "/tmp/g9helper.log"
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let line = "[\(timestamp)] \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: logFile) {
+            if let handle = FileHandle(forWritingAtPath: logFile) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            FileManager.default.createFile(atPath: logFile, contents: data)
+        }
+    }
 }
 
 // MARK: - Status Window
@@ -117,14 +132,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentPresetName = ""
     private var isActive = false
     private var currentVirtualID: CGDirectDisplayID = 0
+    private var targetExternalDisplayID: CGDirectDisplayID = 0  // Track which external display we're mirroring to
 
     // State persistence keys
     private let kLastPresetKey = "lastActivePreset"
     private let kWasCrashKey = "wasRunningWhenCrashed"
     private let kAutoRestoreKey = "autoRestoreOnCrash"
+    private let kAutoApplyOnConnectKey = "autoApplyOnConnect"
+
+    // Track if we're waiting for monitor reconnection
+    private var wasDisconnected = false
+
+    // Track if we're in the middle of setting up HiDPI (don't trigger cleanup during setup)
+    private var isSettingUp = false
 
     // Donation link
     private let donationURL = "https://buymeacoffee.com/alcybr"
+
+    // Display change observer
+    private var displayObserver: Any?
+    private var displayCheckTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("App launched")
@@ -139,13 +166,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "HiDPI Display")
         }
 
+        // Restore wasDisconnected state from UserDefaults (persists across restart)
+        wasDisconnected = UserDefaults.standard.bool(forKey: kWasDisconnectedKey)
+        debugLog("Restored wasDisconnected state: \(wasDisconnected)")
+
         // Clean up any stale state from previous sessions
         cleanupStaleState()
 
         // Check for existing virtual display
         checkCurrentState()
 
-        // Check if we should auto-restore after a crash
+        // Check if we should auto-restore after a crash OR after disconnect restart
         checkAndRestoreFromCrash()
 
         // Build menu
@@ -153,6 +184,222 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Mark that the app is running (for crash detection)
         UserDefaults.standard.set(true, forKey: kWasCrashKey)
+
+        // Start monitoring for display changes (disconnect detection)
+        startDisplayChangeMonitoring()
+    }
+
+    func startDisplayChangeMonitoring() {
+        // Use NotificationCenter to monitor screen configuration changes
+        displayObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            debugLog(">>> Display change notification received")
+            self?.handleDisplayConfigurationChange()
+        }
+
+        // Also add a periodic check as backup (every 3 seconds)
+        displayCheckTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.periodicDisplayCheck()
+        }
+
+        debugLog("Display change monitoring started (notification + timer)")
+    }
+
+    func stopDisplayChangeMonitoring() {
+        if let observer = displayObserver {
+            NotificationCenter.default.removeObserver(observer)
+            displayObserver = nil
+        }
+        displayCheckTimer?.invalidate()
+        displayCheckTimer = nil
+        debugLog("Display change monitoring stopped")
+    }
+
+    func periodicDisplayCheck() {
+        // Don't trigger cleanup during setup
+        if isSettingUp { return }
+
+        let realMonitor = findRealPhysicalMonitor()
+
+        // Case 1: HiDPI active but monitor disconnected
+        if isActive && realMonitor == nil {
+            debugLog(">>> Periodic check: Physical monitor gone - cleaning up")
+            wasDisconnected = true
+            cleanupAfterDisconnect()
+            return
+        }
+
+        // Case 2: HiDPI not active, monitor reconnected, auto-apply enabled
+        if !isActive && wasDisconnected && realMonitor != nil {
+            let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
+            if autoApply, let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey), !lastPreset.isEmpty {
+                debugLog(">>> Periodic check: Monitor reconnected - auto-applying \(lastPreset)")
+                wasDisconnected = false
+                UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+                restorePreset(lastPreset)
+            }
+        }
+    }
+
+    func handleDisplayConfigurationChange() {
+        debugLog("Display configuration changed, checking state...")
+
+        // Don't trigger cleanup during setup
+        if isSettingUp {
+            debugLog("Setup in progress, skipping disconnect check")
+            return
+        }
+
+        // Case 1: HiDPI is active, check if physical monitor was disconnected
+        if isActive && currentVirtualID != 0 {
+            // Only check if the real physical monitor is still connected
+            // Don't check mirroring status - macOS can break mirroring unexpectedly
+            let realMonitor = findRealPhysicalMonitor()
+
+            if realMonitor == nil {
+                debugLog("Physical monitor disconnected (no real monitor found) - cleaning up")
+                wasDisconnected = true
+                cleanupAfterDisconnect()
+                return
+            } else {
+                debugLog("Physical monitor still connected: \(realMonitor!)")
+            }
+            return
+        }
+
+        // Case 2: HiDPI is not active, check if monitor was reconnected
+        let realMonitor = findRealPhysicalMonitor()
+        if !isActive && realMonitor != nil && wasDisconnected {
+            debugLog("External display reconnected")
+
+            let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
+            if autoApply, let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey), !lastPreset.isEmpty {
+                debugLog("Auto-applying last preset: \(lastPreset)")
+                wasDisconnected = false
+                UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+
+                // Delay to let the display settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.restorePreset(lastPreset)
+                }
+            } else {
+                debugLog("Auto-apply disabled or no saved preset")
+                wasDisconnected = false
+                UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+            }
+        }
+    }
+
+    // Find a real physical monitor (not built-in, not a virtual display we created)
+    // Our virtual displays use vendor ID 0x1234 - real monitors have real vendor IDs
+    func findRealPhysicalMonitor() -> CGDirectDisplayID? {
+        var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayList, &displayCount)
+
+        for i in 0..<Int(displayCount) {
+            let displayID = displayList[i]
+            let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
+            let vendorID = CGDisplayVendorNumber(displayID)
+            let size = CGDisplayScreenSize(displayID)
+
+            // Our virtual displays use vendor ID 0x1234 (4660 decimal)
+            let isVirtualDisplay = vendorID == 0x1234
+
+            debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), size=\(size.width)mm")
+
+            // Real monitors are: not built-in, not a virtual display (vendor != 0x1234)
+            if !isBuiltin && !isVirtualDisplay {
+                debugLog("Found real physical monitor: \(displayID) (vendor: \(vendorID))")
+                return displayID
+            }
+        }
+        debugLog("No real physical monitor found")
+        return nil
+    }
+
+    func cleanupAfterDisconnect() {
+        debugLog(">>> Starting disconnect cleanup")
+
+        // Move all windows to main display first
+        moveAllWindowsToMainDisplay()
+
+        // Mark that we're disconnected (for auto-restore on reconnect)
+        UserDefaults.standard.set(true, forKey: kWasDisconnectedKey)
+
+        // The CGVirtualDisplay framework doesn't actually destroy displays when we release
+        // the object - they persist until the app terminates. The only reliable way to
+        // clean up orphaned virtual displays is to restart the app.
+        debugLog(">>> Restarting app to clean up virtual displays...")
+
+        // Relaunch the app
+        relaunchApp()
+    }
+
+    private let kWasDisconnectedKey = "wasDisconnected"
+
+    func relaunchApp() {
+        let task = Process()
+        task.launchPath = "/bin/sh"
+        task.arguments = ["-c", "sleep 1 && open \"\(Bundle.main.bundlePath)\""]
+        task.launch()
+
+        // Terminate current instance
+        NSApp.terminate(nil)
+    }
+
+    // Disable HiDPI when monitor is disconnected - preserves preset for auto-restore
+    func disableHiDPIForDisconnect() {
+        debugLog("Disabling HiDPI for disconnect (preserving preset) - currentVirtualID: \(currentVirtualID)")
+
+        let manager = VirtualDisplayManager.shared()
+
+        // Reset ALL mirroring to ensure clean state
+        manager.resetAllMirroring()
+
+        // Destroy our virtual display
+        manager.destroyAllVirtualDisplays()
+
+        currentVirtualID = 0
+        targetExternalDisplayID = 0
+        isActive = false
+        currentPresetName = ""
+
+        // DO NOT clear saved preset - we want to restore it when monitor reconnects
+        debugLog("HiDPI disabled (preset preserved for reconnection)")
+    }
+
+    func moveAllWindowsToMainDisplay() {
+        debugLog("Moving all windows to main display...")
+
+        // Use AppleScript to move windows since it's more reliable for cross-app windows
+        let script = """
+            tell application "System Events"
+                set allProcesses to every process whose background only is false
+                repeat with proc in allProcesses
+                    try
+                        tell proc
+                            repeat with w in windows
+                                set position of w to {100, 100}
+                            end repeat
+                        end tell
+                    end try
+                end repeat
+            end tell
+            """
+
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                debugLog("AppleScript error moving windows: \(error)")
+            } else {
+                debugLog("Windows moved to main display")
+            }
+        }
     }
 
     func checkAndRestoreFromCrash() {
@@ -164,14 +411,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(true, forKey: kAutoRestoreKey)
         }
 
+        // Default to auto-apply on reconnect enabled
+        if UserDefaults.standard.object(forKey: kAutoApplyOnConnectKey) == nil {
+            UserDefaults.standard.set(true, forKey: kAutoApplyOnConnectKey)
+        }
+
+        // If we restarted after disconnect (not crash), don't try to restore here
+        // Let the reconnect detection handle it when monitor is plugged back in
+        if wasDisconnected {
+            debugLog("Restarted after disconnect - waiting for monitor reconnection")
+            return
+        }
+
         if wasRunning && autoRestore {
             if let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey),
                !lastPreset.isEmpty {
-                debugLog("Detected restart after crash, auto-restoring preset: \(lastPreset)")
+                // Only restore if external display is connected
+                if findExternalDisplay() != nil {
+                    debugLog("Detected restart after crash, auto-restoring preset: \(lastPreset)")
 
-                // Delay restoration to let the system settle
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    self?.restorePreset(lastPreset)
+                    // Delay restoration to let the system settle
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                        self?.restorePreset(lastPreset)
+                    }
+                } else {
+                    debugLog("Detected restart after crash, but no external display - waiting for reconnection")
+                    wasDisconnected = true
+                    UserDefaults.standard.set(true, forKey: kWasDisconnectedKey)
                 }
             }
         }
@@ -187,6 +453,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         debugLog(">>> Auto-restoring preset: \(presetName)")
+
+        // Mark that we're setting up (don't trigger cleanup during setup)
+        isSettingUp = true
 
         StatusWindowController.shared.show(message: "Restoring display configuration...")
 
@@ -224,6 +493,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("Cleaning up stale display state...")
         let manager = VirtualDisplayManager.shared()
 
+        // Check if we have an external display connected
+        let hasExternalDisplay = findExternalDisplay() != nil
+        debugLog("External display connected: \(hasExternalDisplay)")
+
+        // If no external display, move windows to main display first
+        // This handles the case where app was killed/crashed while HiDPI was active
+        if !hasExternalDisplay {
+            debugLog("No external display - moving windows to main display")
+            moveAllWindowsToMainDisplay()
+        }
+
         // Reset any existing mirroring that might be left over
         manager.resetAllMirroring()
 
@@ -234,7 +514,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        disableHiDPISync()
+        debugLog("App terminating - cleaning up...")
+
+        // Stop monitoring
+        stopDisplayChangeMonitoring()
+
+        // Move windows to main display before cleanup
+        if isActive {
+            moveAllWindowsToMainDisplay()
+        }
+
+        // Disable HiDPI but preserve preset for auto-restore on next launch
+        disableHiDPIForDisconnect()
+
+        debugLog("Cleanup complete, terminating")
     }
 
     func checkCurrentState() {
@@ -320,6 +613,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Settings submenu
+        let settingsMenu = NSMenu()
+
+        let autoApplyItem = NSMenuItem(title: "Auto-Apply on Reconnect", action: #selector(toggleAutoApply(_:)), keyEquivalent: "")
+        autoApplyItem.target = self
+        autoApplyItem.state = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey) ? .on : .off
+        settingsMenu.addItem(autoApplyItem)
+
+        let autoRestoreItem = NSMenuItem(title: "Auto-Restore After Crash", action: #selector(toggleAutoRestore(_:)), keyEquivalent: "")
+        autoRestoreItem.target = self
+        autoRestoreItem.state = UserDefaults.standard.bool(forKey: kAutoRestoreKey) ? .on : .off
+        settingsMenu.addItem(autoRestoreItem)
+
+        let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        settingsItem.submenu = settingsMenu
+        menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let aboutItem = NSMenuItem(title: "About G9 Helper", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
@@ -331,11 +643,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
+    @objc func toggleAutoApply(_ sender: NSMenuItem) {
+        let current = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
+        UserDefaults.standard.set(!current, forKey: kAutoApplyOnConnectKey)
+        debugLog("Auto-apply on reconnect: \(!current)")
+        rebuildMenu()
+    }
+
+    @objc func toggleAutoRestore(_ sender: NSMenuItem) {
+        let current = UserDefaults.standard.bool(forKey: kAutoRestoreKey)
+        UserDefaults.standard.set(!current, forKey: kAutoRestoreKey)
+        debugLog("Auto-restore after crash: \(!current)")
+        rebuildMenu()
+    }
+
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.0
+            Version 1.0.2
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -371,6 +697,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Mark that we're setting up (don't trigger cleanup during setup)
+        isSettingUp = true
+
         // Show status window
         StatusWindowController.shared.show(message: "Preparing display configuration...")
 
@@ -396,8 +725,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // Disable HiDPI when user explicitly requests it - clears preset (no auto-restore)
     func disableHiDPISync() {
-        debugLog("Disabling HiDPI sync - currentVirtualID: \(currentVirtualID)")
+        debugLog("Disabling HiDPI (user action) - currentVirtualID: \(currentVirtualID)")
 
         let manager = VirtualDisplayManager.shared()
 
@@ -408,13 +738,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         manager.destroyAllVirtualDisplays()
 
         currentVirtualID = 0
+        targetExternalDisplayID = 0
         isActive = false
         currentPresetName = ""
 
-        // Clear saved preset so we don't auto-restore on next launch
+        // Clear saved preset - user explicitly disabled, don't auto-restore
         clearSavedPreset()
 
-        debugLog("HiDPI disabled")
+        // Also clear the disconnected flag since user is taking explicit action
+        wasDisconnected = false
+        UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+
+        debugLog("HiDPI disabled (preset cleared)")
     }
 
     func createVirtualDisplayAsync(config: PresetConfig) {
@@ -424,6 +759,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let externalID = findExternalDisplay() else {
             debugLog("ERROR: No external display found")
+            isSettingUp = false  // Clear setup flag so reconnect detection works
             StatusWindowController.shared.updateStatus("No external display found")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 StatusWindowController.shared.hide()
@@ -450,6 +786,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if virtualID == 0 || virtualID == UInt32.max {
             debugLog("ERROR: Failed to create virtual display (returned \(virtualID))")
+            isSettingUp = false  // Clear setup flag so reconnect detection works
             StatusWindowController.shared.updateStatus("Failed to create virtual display")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 StatusWindowController.shared.hide()
@@ -477,10 +814,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let success = manager.mirrorDisplay(virtualID, toDisplay: externalID)
         debugLog("Mirror result: \(success)")
 
+        // Setup is complete (whether successful or not)
+        isSettingUp = false
+
         if success {
             isActive = true
             currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
+            targetExternalDisplayID = externalID  // Track target for disconnect detection
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
+            debugLog(">>> HiDPI setup complete, monitoring for disconnect")
         } else {
             debugLog("Mirror failed, cleaning up...")
             manager.destroyVirtualDisplay(virtualID)
@@ -511,13 +853,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for i in 0..<Int(displayCount) {
             let displayID = displayList[i]
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
-            let isVirtual = displayID == currentVirtualID
+            let vendorID = CGDisplayVendorNumber(displayID)
+            let isVirtualDisplay = vendorID == 0x1234  // Our virtual displays use vendor 0x1234
             let size = CGDisplayScreenSize(displayID)
 
-            debugLog("  Display \(displayID): builtin=\(isBuiltin), isOurVirtual=\(isVirtual), size=\(size.width)x\(size.height)mm")
+            debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), isVirtual=\(isVirtualDisplay), size=\(size.width)x\(size.height)mm")
 
-            // Skip builtin displays and our own virtual display
-            if !isBuiltin && !isVirtual {
+            // Skip builtin displays and ANY virtual displays (by vendor ID)
+            if !isBuiltin && !isVirtualDisplay {
                 candidates.append((id: displayID, size: size))
             }
         }
@@ -548,6 +891,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func quitApp() {
+        debugLog("Quit requested by user")
+
+        // Move windows before quitting
+        if isActive {
+            moveAllWindowsToMainDisplay()
+        }
+
         disableHiDPISync()
         NSApp.terminate(nil)
     }
