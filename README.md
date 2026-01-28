@@ -32,7 +32,7 @@ G9 Helper creates a virtual display with HiDPI enabled at your preferred resolut
 
 ### Download
 
-1. Download [`G9.Helper-v1.0.2.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.0.2/G9.Helper-v1.0.2.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
+1. Download [`G9.Helper-v1.0.3.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.0.3/G9.Helper-v1.0.3.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
 2. Open the DMG and drag **G9 Helper** to **Applications**
 3. Launch from Applications or Spotlight
 4. Look for the display icon in your menu bar
