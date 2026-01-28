@@ -446,10 +446,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(false, forKey: kWasCrashKey)
     }
 
+    // Map old preset names to new ones for backwards compatibility
+    func migratePresetName(_ oldName: String) -> String {
+        let migrations: [String: String] = [
+            "g9-native-hidpi": "g9-57-3840x1080",
+            "g9-5120x1440": "g9-57-5120x1440",
+            "g9-4800x1350": "g9-57-4800x1350",
+            "g9-4480x1260": "g9-57-4389x1234",  // closest match
+            "g9-49-native": "g9-49-2560x720",
+            "g9-49-3840x1080": "g9-49-3840x1080",  // same
+            "uw34-2560x1080": "uw34-2293x960",  // closest match
+            "4k-native": "4k-1920x1080",
+            "4k-2560x1440": "4k-2560x1440",  // same
+        ]
+        return migrations[oldName] ?? oldName
+    }
+
     func restorePreset(_ presetName: String) {
-        guard let config = presetConfigs[presetName] else {
-            debugLog("ERROR: Unknown preset for restore: \(presetName)")
+        let migratedName = migratePresetName(presetName)
+        guard let config = presetConfigs[migratedName] else {
+            debugLog("ERROR: Unknown preset for restore: \(presetName) (migrated: \(migratedName))")
             return
+        }
+
+        // Update saved preset to new name if migrated
+        if migratedName != presetName {
+            debugLog("Migrated preset name: \(presetName) -> \(migratedName)")
+            saveCurrentPreset(migratedName)
         }
 
         debugLog(">>> Auto-restoring preset: \(presetName)")
@@ -574,40 +597,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(NSMenuItem.separator())
         }
 
-        // Samsung G9 57" presets
+        // Samsung G9 57" (7680x2160) presets - ordered by scale factor (smaller = more space)
         let g9Menu = NSMenu()
-        addPresetItem(to: g9Menu, preset: "g9-native-hidpi", title: "Native 2x (3840×1080)")
-        addPresetItem(to: g9Menu, preset: "g9-5120x1440", title: "5120×1440 HiDPI (Recommended)")
-        addPresetItem(to: g9Menu, preset: "g9-4800x1350", title: "4800×1350 HiDPI")
-        addPresetItem(to: g9Menu, preset: "g9-4480x1260", title: "4480×1260 HiDPI")
+        addPresetItem(to: g9Menu, preset: "g9-57-6144x1728", title: "6144×1728 (1.25x) - More Space")
+        addPresetItem(to: g9Menu, preset: "g9-57-5908x1662", title: "5908×1662 (1.3x)")
+        addPresetItem(to: g9Menu, preset: "g9-57-5120x1440", title: "5120×1440 (1.5x) ★ Recommended")
+        addPresetItem(to: g9Menu, preset: "g9-57-4800x1350", title: "4800×1350 (1.6x)")
+        addPresetItem(to: g9Menu, preset: "g9-57-4389x1234", title: "4389×1234 (1.75x)")
+        addPresetItem(to: g9Menu, preset: "g9-57-3840x1080", title: "3840×1080 (2.0x) - Larger Text")
 
         let g9Item = NSMenuItem(title: "Samsung G9 57\"", action: nil, keyEquivalent: "")
         g9Item.submenu = g9Menu
         menu.addItem(g9Item)
 
-        // Samsung G9 49" presets
+        // Samsung G9 49" (5120x1440) presets
         let g49Menu = NSMenu()
-        addPresetItem(to: g49Menu, preset: "g9-49-3840x1080", title: "3840×1080 HiDPI (Recommended)")
-        addPresetItem(to: g49Menu, preset: "g9-49-native", title: "Native 2x (2560×720)")
+        addPresetItem(to: g49Menu, preset: "g9-49-4096x1152", title: "4096×1152 (1.25x) - More Space")
+        addPresetItem(to: g49Menu, preset: "g9-49-3938x1108", title: "3938×1108 (1.3x)")
+        addPresetItem(to: g49Menu, preset: "g9-49-3840x1080", title: "3840×1080 (1.33x) ★ Recommended")
+        addPresetItem(to: g49Menu, preset: "g9-49-3413x960", title: "3413×960 (1.5x)")
+        addPresetItem(to: g49Menu, preset: "g9-49-2926x823", title: "2926×823 (1.75x)")
+        addPresetItem(to: g49Menu, preset: "g9-49-2560x720", title: "2560×720 (2.0x) - Larger Text")
 
         let g49Item = NSMenuItem(title: "Samsung G9 49\"", action: nil, keyEquivalent: "")
         g49Item.submenu = g49Menu
         menu.addItem(g49Item)
 
-        // 34" Ultrawide presets
+        // 34" Ultrawide (3440x1440) presets
         let uwMenu = NSMenu()
-        addPresetItem(to: uwMenu, preset: "uw34-2560x1080", title: "2560×1080 HiDPI (Recommended)")
+        addPresetItem(to: uwMenu, preset: "uw34-2752x1152", title: "2752×1152 (1.25x) - More Space")
+        addPresetItem(to: uwMenu, preset: "uw34-2646x1108", title: "2646×1108 (1.3x)")
+        addPresetItem(to: uwMenu, preset: "uw34-2293x960", title: "2293×960 (1.5x) ★ Recommended")
+        addPresetItem(to: uwMenu, preset: "uw34-1966x823", title: "1966×823 (1.75x)")
+        addPresetItem(to: uwMenu, preset: "uw34-1720x720", title: "1720×720 (2.0x) - Larger Text")
 
-        let uwItem = NSMenuItem(title: "34\" Ultrawide", action: nil, keyEquivalent: "")
+        let uwItem = NSMenuItem(title: "34\" Ultrawide (3440×1440)", action: nil, keyEquivalent: "")
         uwItem.submenu = uwMenu
         menu.addItem(uwItem)
 
-        // 4K presets
+        // 4K (3840x2160) presets
         let k4Menu = NSMenu()
-        addPresetItem(to: k4Menu, preset: "4k-2560x1440", title: "2560×1440 HiDPI (Recommended)")
-        addPresetItem(to: k4Menu, preset: "4k-native", title: "Native 2x (1920×1080)")
+        addPresetItem(to: k4Menu, preset: "4k-3072x1728", title: "3072×1728 (1.25x) - More Space")
+        addPresetItem(to: k4Menu, preset: "4k-2954x1662", title: "2954×1662 (1.3x)")
+        addPresetItem(to: k4Menu, preset: "4k-2560x1440", title: "2560×1440 (1.5x) ★ Recommended")
+        addPresetItem(to: k4Menu, preset: "4k-2194x1234", title: "2194×1234 (1.75x)")
+        addPresetItem(to: k4Menu, preset: "4k-1920x1080", title: "1920×1080 (2.0x) - Larger Text")
 
-        let k4Item = NSMenuItem(title: "4K Displays", action: nil, keyEquivalent: "")
+        let k4Item = NSMenuItem(title: "4K Displays (3840×2160)", action: nil, keyEquivalent: "")
         k4Item.submenu = k4Menu
         menu.addItem(k4Item)
 
@@ -661,7 +697,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.2
+            Version 1.0.3
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -916,20 +952,34 @@ struct PresetConfig {
 }
 
 let presetConfigs: [String: PresetConfig] = [
-    // Samsung G9 57" (7680x2160)
-    "g9-native-hidpi": PresetConfig(name: "G9-Native", width: 7680, height: 2160, logicalWidth: 3840, logicalHeight: 1080, ppi: 140, hiDPI: true),
-    "g9-5120x1440": PresetConfig(name: "G9-5120", width: 10240, height: 2880, logicalWidth: 5120, logicalHeight: 1440, ppi: 140, hiDPI: true),
-    "g9-4800x1350": PresetConfig(name: "G9-4800", width: 9600, height: 2700, logicalWidth: 4800, logicalHeight: 1350, ppi: 140, hiDPI: true),
-    "g9-4480x1260": PresetConfig(name: "G9-4480", width: 8960, height: 2520, logicalWidth: 4480, logicalHeight: 1260, ppi: 140, hiDPI: true),
+    // Samsung G9 57" (7680x2160 native) - Fractional scaling options
+    // Scale factor = native / logical, e.g., 7680/5120 = 1.5x
+    "g9-57-6144x1728": PresetConfig(name: "G9-57-6144", width: 12288, height: 3456, logicalWidth: 6144, logicalHeight: 1728, ppi: 140, hiDPI: true),  // 1.25x
+    "g9-57-5908x1662": PresetConfig(name: "G9-57-5908", width: 11816, height: 3324, logicalWidth: 5908, logicalHeight: 1662, ppi: 140, hiDPI: true),  // 1.3x
+    "g9-57-5120x1440": PresetConfig(name: "G9-57-5120", width: 10240, height: 2880, logicalWidth: 5120, logicalHeight: 1440, ppi: 140, hiDPI: true),  // 1.5x (recommended)
+    "g9-57-4800x1350": PresetConfig(name: "G9-57-4800", width: 9600, height: 2700, logicalWidth: 4800, logicalHeight: 1350, ppi: 140, hiDPI: true),   // 1.6x
+    "g9-57-4389x1234": PresetConfig(name: "G9-57-4389", width: 8778, height: 2468, logicalWidth: 4389, logicalHeight: 1234, ppi: 140, hiDPI: true),   // 1.75x
+    "g9-57-3840x1080": PresetConfig(name: "G9-57-3840", width: 7680, height: 2160, logicalWidth: 3840, logicalHeight: 1080, ppi: 140, hiDPI: true),   // 2.0x (native HiDPI)
 
-    // Samsung G9 49" (5120x1440)
-    "g9-49-native": PresetConfig(name: "G9-49-Native", width: 5120, height: 1440, logicalWidth: 2560, logicalHeight: 720, ppi: 109, hiDPI: true),
-    "g9-49-3840x1080": PresetConfig(name: "G9-49-3840", width: 7680, height: 2160, logicalWidth: 3840, logicalHeight: 1080, ppi: 109, hiDPI: true),
+    // Samsung G9 49" (5120x1440 native) - Fractional scaling options
+    "g9-49-4096x1152": PresetConfig(name: "G9-49-4096", width: 8192, height: 2304, logicalWidth: 4096, logicalHeight: 1152, ppi: 109, hiDPI: true),   // 1.25x
+    "g9-49-3938x1108": PresetConfig(name: "G9-49-3938", width: 7876, height: 2216, logicalWidth: 3938, logicalHeight: 1108, ppi: 109, hiDPI: true),   // 1.3x
+    "g9-49-3840x1080": PresetConfig(name: "G9-49-3840", width: 7680, height: 2160, logicalWidth: 3840, logicalHeight: 1080, ppi: 109, hiDPI: true),   // 1.33x
+    "g9-49-3413x960": PresetConfig(name: "G9-49-3413", width: 6826, height: 1920, logicalWidth: 3413, logicalHeight: 960, ppi: 109, hiDPI: true),     // 1.5x (recommended)
+    "g9-49-2926x823": PresetConfig(name: "G9-49-2926", width: 5852, height: 1646, logicalWidth: 2926, logicalHeight: 823, ppi: 109, hiDPI: true),     // 1.75x
+    "g9-49-2560x720": PresetConfig(name: "G9-49-2560", width: 5120, height: 1440, logicalWidth: 2560, logicalHeight: 720, ppi: 109, hiDPI: true),     // 2.0x (native HiDPI)
 
-    // 34" Ultrawide
-    "uw34-2560x1080": PresetConfig(name: "UW34-2560", width: 5120, height: 2160, logicalWidth: 2560, logicalHeight: 1080, ppi: 110, hiDPI: true),
+    // 34" Ultrawide (3440x1440 native) - Fractional scaling options
+    "uw34-2752x1152": PresetConfig(name: "UW34-2752", width: 5504, height: 2304, logicalWidth: 2752, logicalHeight: 1152, ppi: 110, hiDPI: true),     // 1.25x
+    "uw34-2646x1108": PresetConfig(name: "UW34-2646", width: 5292, height: 2216, logicalWidth: 2646, logicalHeight: 1108, ppi: 110, hiDPI: true),     // 1.3x
+    "uw34-2293x960": PresetConfig(name: "UW34-2293", width: 4586, height: 1920, logicalWidth: 2293, logicalHeight: 960, ppi: 110, hiDPI: true),       // 1.5x (recommended)
+    "uw34-1966x823": PresetConfig(name: "UW34-1966", width: 3932, height: 1646, logicalWidth: 1966, logicalHeight: 823, ppi: 110, hiDPI: true),       // 1.75x
+    "uw34-1720x720": PresetConfig(name: "UW34-1720", width: 3440, height: 1440, logicalWidth: 1720, logicalHeight: 720, ppi: 110, hiDPI: true),       // 2.0x (native HiDPI)
 
-    // 4K
-    "4k-native": PresetConfig(name: "4K-Native", width: 3840, height: 2160, logicalWidth: 1920, logicalHeight: 1080, ppi: 163, hiDPI: true),
-    "4k-2560x1440": PresetConfig(name: "4K-2560", width: 5120, height: 2880, logicalWidth: 2560, logicalHeight: 1440, ppi: 163, hiDPI: true),
+    // 4K (3840x2160 native) - Fractional scaling options
+    "4k-3072x1728": PresetConfig(name: "4K-3072", width: 6144, height: 3456, logicalWidth: 3072, logicalHeight: 1728, ppi: 163, hiDPI: true),         // 1.25x
+    "4k-2954x1662": PresetConfig(name: "4K-2954", width: 5908, height: 3324, logicalWidth: 2954, logicalHeight: 1662, ppi: 163, hiDPI: true),         // 1.3x
+    "4k-2560x1440": PresetConfig(name: "4K-2560", width: 5120, height: 2880, logicalWidth: 2560, logicalHeight: 1440, ppi: 163, hiDPI: true),         // 1.5x (recommended)
+    "4k-2194x1234": PresetConfig(name: "4K-2194", width: 4388, height: 2468, logicalWidth: 2194, logicalHeight: 1234, ppi: 163, hiDPI: true),         // 1.75x
+    "4k-1920x1080": PresetConfig(name: "4K-1920", width: 3840, height: 2160, logicalWidth: 1920, logicalHeight: 1080, ppi: 163, hiDPI: true),         // 2.0x (native HiDPI)
 ]
