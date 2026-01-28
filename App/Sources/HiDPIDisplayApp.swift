@@ -116,6 +116,284 @@ class StatusWindowController {
     }
 }
 
+// MARK: - Auto Update Checker
+
+class UpdateChecker {
+    static let shared = UpdateChecker()
+
+    private let repoOwner = "knightynite"
+    private let repoName = "HiDPIVirtualDisplay"
+    private let currentVersion: String
+    private let kLastUpdateCheckKey = "lastUpdateCheck"
+    private let kSkippedVersionKey = "skippedVersion"
+    private let kAutoCheckUpdatesKey = "autoCheckUpdates"
+
+    private init() {
+        // Get current version from bundle
+        currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        debugLog("UpdateChecker initialized, current version: \(currentVersion)")
+    }
+
+    // Check if auto-update is enabled (default: true)
+    var autoCheckEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: kAutoCheckUpdatesKey) == nil {
+                return true  // Default to enabled
+            }
+            return UserDefaults.standard.bool(forKey: kAutoCheckUpdatesKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: kAutoCheckUpdatesKey)
+        }
+    }
+
+    // Check for updates (called on app launch)
+    func checkForUpdatesInBackground() {
+        guard autoCheckEnabled else {
+            debugLog("Auto-update check disabled")
+            return
+        }
+
+        // Don't check more than once per hour
+        let lastCheck = UserDefaults.standard.double(forKey: kLastUpdateCheckKey)
+        let hourAgo = Date().timeIntervalSince1970 - 3600
+        if lastCheck > hourAgo {
+            debugLog("Skipping update check - checked recently")
+            return
+        }
+
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.fetchLatestRelease { result in
+                switch result {
+                case .success(let release):
+                    self?.handleReleaseInfo(release)
+                case .failure(let error):
+                    debugLog("Update check failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // Manual check (from menu)
+    func checkForUpdatesManually() {
+        debugLog("Manual update check initiated")
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.fetchLatestRelease { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let release):
+                        self?.handleReleaseInfo(release, manual: true)
+                    case .failure(let error):
+                        self?.showError("Could not check for updates: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+
+    private func fetchLatestRelease(completion: @escaping (Result<GitHubRelease, Error>) -> Void) {
+        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NSError(domain: "UpdateChecker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 15
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let data = data else {
+                completion(.failure(NSError(domain: "UpdateChecker", code: -2, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                return
+            }
+
+            do {
+                let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+                completion(.success(release))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    private func handleReleaseInfo(_ release: GitHubRelease, manual: Bool = false) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: kLastUpdateCheckKey)
+
+        let latestVersion = release.tagName.replacingOccurrences(of: "v", with: "")
+        debugLog("Latest version: \(latestVersion), current: \(currentVersion)")
+
+        if isNewerVersion(latestVersion, than: currentVersion) {
+            // Check if user skipped this version
+            let skippedVersion = UserDefaults.standard.string(forKey: kSkippedVersionKey)
+            if !manual && skippedVersion == latestVersion {
+                debugLog("User previously skipped version \(latestVersion)")
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.showUpdateAlert(release: release, latestVersion: latestVersion)
+            }
+        } else if manual {
+            DispatchQueue.main.async { [weak self] in
+                self?.showUpToDateAlert()
+            }
+        }
+    }
+
+    private func isNewerVersion(_ new: String, than current: String) -> Bool {
+        let newParts = new.split(separator: ".").compactMap { Int($0) }
+        let currentParts = current.split(separator: ".").compactMap { Int($0) }
+
+        for i in 0..<max(newParts.count, currentParts.count) {
+            let newPart = i < newParts.count ? newParts[i] : 0
+            let currentPart = i < currentParts.count ? currentParts[i] : 0
+
+            if newPart > currentPart { return true }
+            if newPart < currentPart { return false }
+        }
+        return false
+    }
+
+    private func showUpdateAlert(release: GitHubRelease, latestVersion: String) {
+        let alert = NSAlert()
+        alert.messageText = "Update Available"
+        alert.informativeText = "G9 Helper \(latestVersion) is available (you have \(currentVersion)).\n\n\(release.name ?? "")\n\nWould you like to download it?"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "Skip This Version")
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            downloadUpdate(release: release)
+        case .alertThirdButtonReturn:
+            UserDefaults.standard.set(latestVersion, forKey: kSkippedVersionKey)
+            debugLog("User skipped version \(latestVersion)")
+        default:
+            break
+        }
+    }
+
+    private func showUpToDateAlert() {
+        let alert = NSAlert()
+        alert.messageText = "You're Up to Date"
+        alert.informativeText = "G9 Helper \(currentVersion) is the latest version."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Update Check Failed"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func downloadUpdate(release: GitHubRelease) {
+        // Find the DMG asset
+        guard let dmgAsset = release.assets.first(where: { $0.name.hasSuffix(".dmg") }) else {
+            debugLog("No DMG found in release")
+            // Fallback to opening release page
+            if let url = URL(string: release.htmlUrl) {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+
+        debugLog("Downloading: \(dmgAsset.browserDownloadUrl)")
+
+        // Show download progress
+        StatusWindowController.shared.show(message: "Downloading update...")
+
+        guard let url = URL(string: dmgAsset.browserDownloadUrl) else { return }
+
+        let downloadTask = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, response, error in
+            DispatchQueue.main.async {
+                StatusWindowController.shared.hide()
+
+                if let error = error {
+                    self?.showError("Download failed: \(error.localizedDescription)")
+                    return
+                }
+
+                guard let tempURL = tempURL else {
+                    self?.showError("Download failed: No file received")
+                    return
+                }
+
+                // Move to Downloads folder
+                let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                let destURL = downloadsURL.appendingPathComponent(dmgAsset.name)
+
+                do {
+                    // Remove existing file if present
+                    if FileManager.default.fileExists(atPath: destURL.path) {
+                        try FileManager.default.removeItem(at: destURL)
+                    }
+                    try FileManager.default.moveItem(at: tempURL, to: destURL)
+
+                    debugLog("Downloaded to: \(destURL.path)")
+
+                    // Open the DMG
+                    NSWorkspace.shared.open(destURL)
+
+                    // Show instructions
+                    self?.showInstallInstructions()
+
+                } catch {
+                    self?.showError("Could not save update: \(error.localizedDescription)")
+                }
+            }
+        }
+        downloadTask.resume()
+    }
+
+    private func showInstallInstructions() {
+        let alert = NSAlert()
+        alert.messageText = "Update Downloaded"
+        alert.informativeText = "The update has been downloaded and opened.\n\n1. Drag the new G9 Helper to Applications\n2. Replace the existing version\n3. Relaunch G9 Helper"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}
+
+// GitHub API Response Models
+struct GitHubRelease: Codable {
+    let tagName: String
+    let name: String?
+    let htmlUrl: String
+    let assets: [GitHubAsset]
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case name
+        case htmlUrl = "html_url"
+        case assets
+    }
+}
+
+struct GitHubAsset: Codable {
+    let name: String
+    let browserDownloadUrl: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case browserDownloadUrl = "browser_download_url"
+    }
+}
+
 @main
 struct HiDPIDisplayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -187,6 +465,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start monitoring for display changes (disconnect detection)
         startDisplayChangeMonitoring()
+
+        // Check for updates in background
+        UpdateChecker.shared.checkForUpdatesInBackground()
     }
 
     func startDisplayChangeMonitoring() {
@@ -674,11 +955,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         autoRestoreItem.state = UserDefaults.standard.bool(forKey: kAutoRestoreKey) ? .on : .off
         settingsMenu.addItem(autoRestoreItem)
 
+        let autoUpdateItem = NSMenuItem(title: "Check for Updates Automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
+        autoUpdateItem.target = self
+        autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
+        settingsMenu.addItem(autoUpdateItem)
+
         let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
         settingsItem.submenu = settingsMenu
         menu.addItem(settingsItem)
 
         menu.addItem(NSMenuItem.separator())
+
+        let checkUpdateItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+        checkUpdateItem.target = self
+        menu.addItem(checkUpdateItem)
 
         let aboutItem = NSMenuItem(title: "About G9 Helper", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
@@ -705,11 +995,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc func toggleAutoUpdate(_ sender: NSMenuItem) {
+        UpdateChecker.shared.autoCheckEnabled = !UpdateChecker.shared.autoCheckEnabled
+        debugLog("Auto-check updates: \(UpdateChecker.shared.autoCheckEnabled)")
+        rebuildMenu()
+    }
+
+    @objc func checkForUpdates() {
+        UpdateChecker.shared.checkForUpdatesManually()
+    }
+
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.4
+            Version 1.0.5
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
