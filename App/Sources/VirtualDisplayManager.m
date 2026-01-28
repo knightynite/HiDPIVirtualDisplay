@@ -282,15 +282,54 @@ static void retainWindowIfNeeded(NSWindow *window) {
 }
 
 - (void)destroyVirtualDisplay:(CGDirectDisplayID)displayID {
-    NSLog(@"VDM: destroyVirtualDisplay called for %u (NO-OP)", displayID);
+    NSLog(@"VDM: destroyVirtualDisplay called for %u", displayID);
     if (displayID == _currentDisplayID) {
-        _currentDisplayID = kCGNullDirectDisplay;
+        [self releaseDisplayObjects];
     }
 }
 
 - (void)destroyAllVirtualDisplays {
-    NSLog(@"VDM: destroyAllVirtualDisplays called (NO-OP)");
+    NSLog(@"VDM: destroyAllVirtualDisplays called");
+    [self releaseDisplayObjects];
+}
+
+- (void)releaseDisplayObjects {
+    NSLog(@"VDM: Releasing display objects...");
+
+    // Release in reverse order of creation
+    if (_display) {
+        NSLog(@"VDM: Releasing _display %p", _display);
+        [_display release];
+        _display = nil;
+    }
+
+    if (_modesArray) {
+        [_modesArray release];
+        _modesArray = nil;
+    }
+
+    if (_mode) {
+        [_mode release];
+        _mode = nil;
+    }
+
+    if (_settings) {
+        [_settings release];
+        _settings = nil;
+    }
+
+    if (_descriptor) {
+        [_descriptor release];
+        _descriptor = nil;
+    }
+
+    if (_displayName) {
+        [_displayName release];
+        _displayName = nil;
+    }
+
     _currentDisplayID = kCGNullDirectDisplay;
+    NSLog(@"VDM: Display objects released");
 }
 
 - (void)resetAllMirroring {
