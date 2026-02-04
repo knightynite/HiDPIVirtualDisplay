@@ -427,6 +427,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Display change observer
     private var displayObserver: Any?
     private var displayCheckTimer: Timer?
+    private var wakeObserver: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("App launched")
@@ -483,13 +484,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.periodicDisplayCheck()
         }
 
-        debugLog("Display change monitoring started (notification + timer)")
+        // Monitor for system wake to restore HiDPI configuration
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            debugLog(">>> System wake notification received")
+            self?.handleWakeFromSleep()
+        }
+
+        debugLog("Display change monitoring started (notification + timer + wake)")
     }
 
     func stopDisplayChangeMonitoring() {
         if let observer = displayObserver {
             NotificationCenter.default.removeObserver(observer)
             displayObserver = nil
+        }
+        if let observer = wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            wakeObserver = nil
         }
         displayCheckTimer?.invalidate()
         displayCheckTimer = nil
@@ -510,6 +525,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Case 1b: Orphaned virtual display exists (monitor gone, but isActive is false)
+        // This can happen if mirror failed or app state got out of sync
+        if !isActive && realMonitor == nil && hasOrphanedVirtualDisplay() {
+            debugLog(">>> Periodic check: Orphaned virtual display detected - cleaning up")
+            wasDisconnected = true
+            cleanupAfterDisconnect()
+            return
+        }
+
         // Case 2: HiDPI not active, monitor reconnected, auto-apply enabled
         if !isActive && wasDisconnected && realMonitor != nil {
             let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
@@ -519,6 +543,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
                 restorePreset(lastPreset)
             }
+        }
+    }
+
+    func handleWakeFromSleep() {
+        // Don't restore during setup
+        if isSettingUp {
+            debugLog("Wake: Setup in progress, skipping restore")
+            return
+        }
+
+        // Check if we have a saved preset to restore
+        guard let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey), !lastPreset.isEmpty else {
+            debugLog("Wake: No saved preset to restore")
+            return
+        }
+
+        // Check if external display is connected
+        guard findRealPhysicalMonitor() != nil else {
+            debugLog("Wake: No external monitor found, skipping restore")
+            return
+        }
+
+        debugLog(">>> Wake: Restoring HiDPI preset after sleep: \(lastPreset)")
+
+        // Mark as setting up to prevent other handlers from interfering
+        isSettingUp = true
+
+        // Reset current state - sleep/wake often breaks the virtual display mirroring
+        let manager = VirtualDisplayManager.shared()
+        manager.resetAllMirroring()
+        manager.destroyAllVirtualDisplays()
+        currentVirtualID = 0
+        isActive = false
+        currentPresetName = ""
+
+        // Delay restoration to let the display system fully wake up
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            self?.restorePreset(lastPreset)
         }
     }
 
@@ -597,6 +659,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         debugLog("No real physical monitor found")
         return nil
+    }
+
+    // Check if there's an orphaned virtual display (vendor 0x1234) that we created
+    func hasOrphanedVirtualDisplay() -> Bool {
+        var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayList, &displayCount)
+
+        for i in 0..<Int(displayCount) {
+            let displayID = displayList[i]
+            let vendorID = CGDisplayVendorNumber(displayID)
+            // Our virtual displays use vendor ID 0x1234 (4660 decimal)
+            if vendorID == 0x1234 {
+                debugLog("Found orphaned virtual display: \(displayID)")
+                return true
+            }
+        }
+        return false
     }
 
     func cleanupAfterDisconnect() {
@@ -1165,7 +1245,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             currentVirtualID = 0
             isActive = false
             currentPresetName = ""
-            StatusWindowController.shared.updateStatus("Failed to configure display")
+            // Set wasDisconnected so we retry when monitor is fully ready
+            wasDisconnected = true
+            UserDefaults.standard.set(true, forKey: kWasDisconnectedKey)
+            debugLog("Will retry when monitor is ready")
+            StatusWindowController.shared.updateStatus("Waiting for display...")
         }
 
         // Hide status window after a short delay
