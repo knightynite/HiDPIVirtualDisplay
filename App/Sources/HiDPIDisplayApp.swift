@@ -1086,7 +1086,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.7
+            Version 1.0.8
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -1168,6 +1168,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("HiDPI disabled (preset cleared)")
     }
 
+    /// Query the current refresh rate of a physical display.
+    /// Falls back to 60.0 Hz if the rate cannot be determined or is reported as 0
+    /// (which happens with some display types on macOS).
+    func getDisplayRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
+        guard let mode = CGDisplayCopyDisplayMode(displayID) else {
+            debugLog("Could not get display mode for \(displayID), defaulting to 60 Hz")
+            return 60.0
+        }
+        let rate = mode.refreshRate
+        debugLog("Display \(displayID) reports refresh rate: \(rate) Hz")
+        // macOS reports 0 Hz for some displays (e.g. DisplayLink, some USB-C)
+        // Fall back to 60 Hz in that case
+        return rate > 0 ? rate : 60.0
+    }
+
     func createVirtualDisplayAsync(config: PresetConfig) {
         debugLog("Creating virtual display: \(config.width)x\(config.height)")
 
@@ -1187,6 +1202,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         StatusWindowController.shared.updateStatus("Creating virtual display...")
 
+        // Match the physical monitor's refresh rate to prevent flicker
+        let refreshRate = getDisplayRefreshRate(externalID)
+        debugLog("Will create virtual display at \(refreshRate) Hz to match physical monitor")
+
         // Create virtual display
         let manager = VirtualDisplayManager.shared()
         debugLog("Calling createVirtualDisplay...")
@@ -1196,7 +1215,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ppi: config.ppi,
             hiDPI: config.hiDPI,
             name: config.name,
-            refreshRate: 60.0
+            refreshRate: refreshRate
         )
         debugLog("createVirtualDisplay returned: \(virtualID)")
 

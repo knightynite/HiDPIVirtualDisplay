@@ -31,7 +31,8 @@ struct DisplayPreset {
     let logicalWidth: UInt32
     let logicalHeight: UInt32
     let ppi: UInt32
-    let refreshRate: Double
+    // refreshRate is detected at runtime from the physical monitor
+    // to prevent flicker from rate mismatch
 
     var isHiDPI: Bool {
         return framebufferWidth == logicalWidth * 2
@@ -47,8 +48,7 @@ let g9Presets: [DisplayPreset] = [
         framebufferHeight: 2160,
         logicalWidth: 3840,
         logicalHeight: 1080,
-        ppi: 140,
-        refreshRate: 60
+        ppi: 140
     ),
     DisplayPreset(
         name: "g9-5120x1440",
@@ -57,8 +57,7 @@ let g9Presets: [DisplayPreset] = [
         framebufferHeight: 2880,
         logicalWidth: 5120,
         logicalHeight: 1440,
-        ppi: 140,
-        refreshRate: 60
+        ppi: 140
     ),
     DisplayPreset(
         name: "g9-4800x1350",
@@ -67,8 +66,7 @@ let g9Presets: [DisplayPreset] = [
         framebufferHeight: 2700,
         logicalWidth: 4800,
         logicalHeight: 1350,
-        ppi: 140,
-        refreshRate: 60
+        ppi: 140
     ),
     DisplayPreset(
         name: "g9-4480x1260",
@@ -77,8 +75,7 @@ let g9Presets: [DisplayPreset] = [
         framebufferHeight: 2520,
         logicalWidth: 4480,
         logicalHeight: 1260,
-        ppi: 140,
-        refreshRate: 60
+        ppi: 140
     ),
     DisplayPreset(
         name: "g9-3840x1080-lodpi",
@@ -87,8 +84,7 @@ let g9Presets: [DisplayPreset] = [
         framebufferHeight: 1080,
         logicalWidth: 3840,
         logicalHeight: 1080,
-        ppi: 140,
-        refreshRate: 60
+        ppi: 140
     )
 ]
 
@@ -101,8 +97,7 @@ let genericPresets: [DisplayPreset] = [
         framebufferHeight: 2160,
         logicalWidth: 1920,
         logicalHeight: 1080,
-        ppi: 163,
-        refreshRate: 60
+        ppi: 163
     ),
     DisplayPreset(
         name: "5k-hidpi",
@@ -111,8 +106,7 @@ let genericPresets: [DisplayPreset] = [
         framebufferHeight: 2880,
         logicalWidth: 2560,
         logicalHeight: 1440,
-        ppi: 218,
-        refreshRate: 60
+        ppi: 218
     ),
     DisplayPreset(
         name: "1440p-hidpi",
@@ -121,12 +115,36 @@ let genericPresets: [DisplayPreset] = [
         framebufferHeight: 1440,
         logicalWidth: 1280,
         logicalHeight: 720,
-        ppi: 109,
-        refreshRate: 60
+        ppi: 109
     )
 ]
 
 // MARK: - Helper Functions
+
+/// Detect the refresh rate of an external (non-builtin) display.
+/// Returns the rate in Hz, or 60.0 as a safe default.
+func detectExternalDisplayRefreshRate() -> Double {
+    var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
+    var displayCount: UInt32 = 0
+    CGGetOnlineDisplayList(32, &displayList, &displayCount)
+
+    for i in 0..<Int(displayCount) {
+        let displayID = displayList[i]
+        // Skip builtin displays and our virtual displays (vendor 0x1234)
+        if CGDisplayIsBuiltin(displayID) != 0 { continue }
+        if CGDisplayVendorNumber(displayID) == 0x1234 { continue }
+
+        if let mode = CGDisplayCopyDisplayMode(displayID) {
+            let rate = mode.refreshRate
+            if rate > 0 {
+                print(colorize("Detected external display \(displayID) at \(rate) Hz", .cyan))
+                return rate
+            }
+        }
+    }
+    print(colorize("Could not detect external display refresh rate, defaulting to 60 Hz", .yellow))
+    return 60.0
+}
 
 func printUsage() {
     print("""
@@ -255,10 +273,14 @@ func createFromPreset(_ presetName: String) -> CGDirectDisplayID {
 
     let manager = VirtualDisplayManager.shared()
 
+    // Match the physical monitor's refresh rate to prevent flicker
+    let refreshRate = detectExternalDisplayRefreshRate()
+
     print(colorize("Creating virtual display from preset: \(preset.name)", .cyan))
     print("    Framebuffer: \(preset.framebufferWidth)x\(preset.framebufferHeight)")
     print("    Logical: \(preset.logicalWidth)x\(preset.logicalHeight)")
     print("    HiDPI: \(preset.isHiDPI)")
+    print("    Refresh Rate: \(refreshRate) Hz")
 
     let displayID = manager.createVirtualDisplay(
         withWidth: preset.framebufferWidth,
@@ -266,7 +288,7 @@ func createFromPreset(_ presetName: String) -> CGDirectDisplayID {
         ppi: preset.ppi,
         hiDPI: preset.isHiDPI,
         name: preset.name,
-        refreshRate: preset.refreshRate
+        refreshRate: refreshRate
     )
 
     if displayID == kCGNullDirectDisplay {
@@ -286,11 +308,15 @@ func createFromPreset(_ presetName: String) -> CGDirectDisplayID {
 func createCustomDisplay(width: UInt32, height: UInt32, ppi: UInt32, hiDPI: Bool, name: String) -> CGDirectDisplayID {
     let manager = VirtualDisplayManager.shared()
 
+    // Match the physical monitor's refresh rate to prevent flicker
+    let refreshRate = detectExternalDisplayRefreshRate()
+
     print(colorize("Creating custom virtual display:", .cyan))
     print("    Size: \(width)x\(height)")
     print("    PPI: \(ppi)")
     print("    HiDPI: \(hiDPI)")
     print("    Name: \(name)")
+    print("    Refresh Rate: \(refreshRate) Hz")
 
     let displayID = manager.createVirtualDisplay(
         withWidth: width,
@@ -298,7 +324,7 @@ func createCustomDisplay(width: UInt32, height: UInt32, ppi: UInt32, hiDPI: Bool
         ppi: ppi,
         hiDPI: hiDPI,
         name: name,
-        refreshRate: 60
+        refreshRate: refreshRate
     )
 
     if displayID == kCGNullDirectDisplay {
