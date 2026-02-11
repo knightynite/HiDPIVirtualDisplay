@@ -130,12 +130,25 @@
     // But we set PPI based on the virtual framebuffer to get correct physical size appearance
     unsigned int effectivePPI = 140;
 
+    // Detect refresh rate of the main external display to prevent flicker
+    CGDirectDisplayID mainID = CGMainDisplayID();
+    double refreshRate = 60.0;
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(mainID);
+    if (mode) {
+        double rate = CGDisplayModeGetRefreshRate(mode);
+        if (rate > 0) {
+            refreshRate = rate;
+        }
+        CGDisplayModeRelease(mode);
+    }
+    NSLog(@"VDM: G9 convenience method using refresh rate: %.1f Hz", refreshRate);
+
     return [self createVirtualDisplayWithWidth:framebufferWidth
                                         height:framebufferHeight
                                            ppi:effectivePPI
                                          hiDPI:YES
                                           name:@"G9 HiDPI Virtual"
-                                   refreshRate:60.0];
+                                   refreshRate:refreshRate];
 }
 
 - (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
