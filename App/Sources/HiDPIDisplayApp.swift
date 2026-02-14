@@ -417,6 +417,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kWasCrashKey = "wasRunningWhenCrashed"
     private let kAutoRestoreKey = "autoRestoreOnCrash"
     private let kAutoApplyOnConnectKey = "autoApplyOnConnect"
+    private let kRefreshRateKey = "customRefreshRate"  // 0.0 = auto-detect
 
     // Track if we're waiting for monitor reconnection
     private var wasDisconnected = false
@@ -1037,6 +1038,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
         settingsMenu.addItem(autoUpdateItem)
 
+        settingsMenu.addItem(NSMenuItem.separator())
+
+        // Refresh rate submenu
+        let refreshMenu = NSMenu()
+        let currentRate = UserDefaults.standard.double(forKey: kRefreshRateKey)
+        let rates: [(String, Double)] = [
+            ("Auto (detect from monitor)", 0.0),
+            ("60 Hz", 60.0),
+            ("120 Hz", 120.0),
+            ("144 Hz", 144.0),
+            ("165 Hz", 165.0),
+            ("240 Hz", 240.0),
+        ]
+        for (title, rate) in rates {
+            let item = NSMenuItem(title: title, action: #selector(setRefreshRate(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = rate as NSNumber
+            item.state = (currentRate == rate) ? .on : .off
+            refreshMenu.addItem(item)
+        }
+        let refreshItem = NSMenuItem(title: "Refresh Rate", action: nil, keyEquivalent: "")
+        refreshItem.submenu = refreshMenu
+        settingsMenu.addItem(refreshItem)
+
         let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
         settingsItem.submenu = settingsMenu
         menu.addItem(settingsItem)
@@ -1078,6 +1103,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc func setRefreshRate(_ sender: NSMenuItem) {
+        guard let rate = sender.representedObject as? NSNumber else { return }
+        UserDefaults.standard.set(rate.doubleValue, forKey: kRefreshRateKey)
+        debugLog("Refresh rate set to: \(rate.doubleValue == 0 ? "Auto" : "\(rate.doubleValue) Hz")")
+        rebuildMenu()
+    }
+
     @objc func checkForUpdates() {
         UpdateChecker.shared.checkForUpdatesManually()
     }
@@ -1086,7 +1118,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.8
+            Version 1.0.9
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -1168,18 +1200,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("HiDPI disabled (preset cleared)")
     }
 
-    /// Query the current refresh rate of a physical display.
-    /// Falls back to 60.0 Hz if the rate cannot be determined or is reported as 0
-    /// (which happens with some display types on macOS).
+    /// Get the refresh rate for the virtual display.
+    /// Checks user's custom setting first, then auto-detects from physical monitor.
     func getDisplayRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
+        let customRate = UserDefaults.standard.double(forKey: kRefreshRateKey)
+        if customRate > 0 {
+            debugLog("Using custom refresh rate: \(customRate) Hz")
+            return customRate
+        }
+
         guard let mode = CGDisplayCopyDisplayMode(displayID) else {
             debugLog("Could not get display mode for \(displayID), defaulting to 60 Hz")
             return 60.0
         }
         let rate = mode.refreshRate
         debugLog("Display \(displayID) reports refresh rate: \(rate) Hz")
-        // macOS reports 0 Hz for some displays (e.g. DisplayLink, some USB-C)
-        // Fall back to 60 Hz in that case
         return rate > 0 ? rate : 60.0
     }
 

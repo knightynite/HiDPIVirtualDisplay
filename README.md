@@ -32,7 +32,7 @@ G9 Helper creates a virtual display with HiDPI enabled at your preferred resolut
 
 ### Download
 
-1. Download [`G9.Helper-v1.0.8.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.0.8/G9.Helper-v1.0.8.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
+1. Download [`G9.Helper-v1.0.9.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.0.9/G9.Helper-v1.0.9.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
 2. Open the DMG and drag **G9 Helper** to **Applications**
 3. Launch from Applications or Spotlight
 4. Look for the display icon in your menu bar
@@ -130,6 +130,7 @@ This is a known limitation of using private APIs. The display configuration pers
 - HDR may not function in mirrored mode
 - May require re-enabling after sleep/wake cycles
 - Uses private macOS APIs (may break with future updates)
+- Refresh rate is auto-detected, but you can override it manually under Settings > Refresh Rate
 
 ## Uninstall
 
@@ -171,6 +172,8 @@ HiDPIVirtualDisplay/
 **Display issues after changing monitor settings**: Quit and relaunch the app.
 
 **Virtual display persists after quit**: Restart your Mac to clear orphaned displays.
+
+**Monitor flickers**: Go to Settings > Refresh Rate and set it to match your monitor's refresh rate manually. Most monitors work fine with Auto, but some high-refresh displays (165Hz, 240Hz) may need the manual setting.
 
 **Frequent crashes**: Install the launch agent for automatic recovery:
 ```bash

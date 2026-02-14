@@ -183,7 +183,18 @@ static void retainWindowIfNeeded(NSWindow *window) {
         [mode retain];
         _mode = mode;
 
-        _modesArray = [@[_mode] retain];
+        // Create modes array with target rate and 60 Hz fallback for better compatibility
+        NSMutableArray *modes = [NSMutableArray arrayWithObject:_mode];
+        if (refreshRate != 60.0) {
+            CGVirtualDisplayMode *fallbackMode = [[CGVirtualDisplayMode alloc] initWithWidth:modeWidth
+                                                                                      height:modeHeight
+                                                                                 refreshRate:60.0];
+            if (fallbackMode) {
+                [modes addObject:fallbackMode];
+                NSLog(@"VDM: Added 60 Hz fallback mode");
+            }
+        }
+        _modesArray = [modes retain];
         _settings.modes = _modesArray;
 
         NSLog(@"VDM: Creating display...");
@@ -224,16 +235,25 @@ static void retainWindowIfNeeded(NSWindow *window) {
 
 - (CGDirectDisplayID)createG9VirtualDisplayWithScaledWidth:(unsigned int)scaledWidth
                                               scaledHeight:(unsigned int)scaledHeight {
-    // Detect refresh rate of the main external display to prevent flicker
-    CGDirectDisplayID mainID = CGMainDisplayID();
+    // Detect refresh rate from the actual external display, not the built-in screen
     double refreshRate = 60.0;
-    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(mainID);
-    if (mode) {
-        double rate = CGDisplayModeGetRefreshRate(mode);
-        if (rate > 0) {
-            refreshRate = rate;
+    CGDirectDisplayID displayList[32];
+    uint32_t displayCount;
+    if (CGGetOnlineDisplayList(32, displayList, &displayCount) == kCGErrorSuccess) {
+        for (uint32_t i = 0; i < displayCount; i++) {
+            if (!CGDisplayIsBuiltin(displayList[i]) && CGDisplayVendorNumber(displayList[i]) != 0x1234) {
+                CGDisplayModeRef mode = CGDisplayCopyDisplayMode(displayList[i]);
+                if (mode) {
+                    double rate = CGDisplayModeGetRefreshRate(mode);
+                    CGDisplayModeRelease(mode);
+                    if (rate > 0) {
+                        refreshRate = rate;
+                        NSLog(@"VDM: Detected external monitor refresh rate: %.0f Hz", rate);
+                        break;
+                    }
+                }
+            }
         }
-        CGDisplayModeRelease(mode);
     }
     NSLog(@"VDM: G9 convenience method using refresh rate: %.1f Hz", refreshRate);
 
