@@ -58,7 +58,6 @@ STEP 3: USE
   4. Wait a few seconds for HiDPI to activate
 
 ===============================================
-  Support: https://buymeacoffee.com/alcybr
   GitHub:  https://github.com/knightynite/HiDPIVirtualDisplay
 ===============================================
 EOF

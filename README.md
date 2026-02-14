@@ -2,11 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2012%2B-lightgrey.svg)](https://www.apple.com/macos/)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-orange.svg)](https://buymeacoffee.com/alcybr)
 
 A lightweight macOS menu bar utility that unlocks crisp HiDPI (Retina) scaling on Samsung Odyssey G9 and other large monitors.
-
-**Free and open source** - if you find it useful, consider [buying me a coffee](https://buymeacoffee.com/alcybr)!
 
 ## The Problem
 
@@ -195,12 +192,6 @@ The app leverages macOS private APIs to create virtual displays with custom prop
 - VirtualDisplayManager compiled without ARC (`-fno-objc-arc`) for manual memory control
 - Window tracking to prevent framework-related crashes
 - UserDefaults for state persistence across crashes
-
-## Support
-
-If G9 Helper improves your workflow, consider supporting development:
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-orange.svg?style=for-the-badge)](https://buymeacoffee.com/alcybr)
 
 ## License
 

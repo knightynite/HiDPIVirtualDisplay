@@ -55,10 +55,6 @@ UNINSTALL
 1. Click the menu bar icon and select "Quit"
 2. Drag the app from Applications to Trash
 
-SUPPORT
-If you find this useful, consider buying me a coffee:
-https://buymeacoffee.com/alcybr
-
 More info: https://github.com/knightynite/HiDPIVirtualDisplay
 
 ---
