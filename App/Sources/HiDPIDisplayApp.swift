@@ -690,6 +690,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean up any stale state from previous sessions
         cleanupStaleState()
 
+        // If orphaned virtual displays exist from a previous crash and this
+        // isn't already a cleanup restart, terminate and relaunch so macOS
+        // reclaims the displays (we can't destroy cross-process displays via API)
+        if hasOrphanedVirtualDisplay() && !isCleanupRestart() {
+            debugLog("Orphaned virtual displays detected from previous crash, restarting to clean up...")
+            markCleanupRestart()
+            relaunchApp()
+            return
+        }
+
         // Check for existing virtual display
         checkCurrentState()
 
@@ -948,6 +958,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Terminate current instance
         NSApp.terminate(nil)
+    }
+
+    private let cleanupMarkerPath = "/tmp/g9helper-cleanup-marker"
+
+    /// Check if this launch is a cleanup restart (prevent infinite restart loops)
+    func isCleanupRestart() -> Bool {
+        guard FileManager.default.fileExists(atPath: cleanupMarkerPath) else { return false }
+        // Only treat as cleanup restart if marker is recent (within 30 seconds)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: cleanupMarkerPath),
+              let date = attrs[.modificationDate] as? Date,
+              Date().timeIntervalSince(date) < 30 else {
+            try? FileManager.default.removeItem(atPath: cleanupMarkerPath)
+            return false
+        }
+        try? FileManager.default.removeItem(atPath: cleanupMarkerPath)
+        return true
+    }
+
+    /// Mark that we're about to do a cleanup restart
+    func markCleanupRestart() {
+        FileManager.default.createFile(atPath: cleanupMarkerPath, contents: nil)
     }
 
     // Disable HiDPI when monitor is disconnected - preserves preset for auto-restore
@@ -1279,6 +1310,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let k4Item = NSMenuItem(title: "4K Displays (3840×2160)", action: nil, keyEquivalent: "")
         k4Item.submenu = k4Menu
         menu.addItem(k4Item)
+
+        // Show cleanup option if orphaned virtual displays exist
+        if hasOrphanedVirtualDisplay() {
+            menu.addItem(NSMenuItem.separator())
+            let cleanupItem = NSMenuItem(title: "Clean Up Phantom Displays", action: #selector(cleanUpDisplays), keyEquivalent: "")
+            cleanupItem.target = self
+            menu.addItem(cleanupItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -1690,6 +1729,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         debugLog("  -> No external display found")
         return nil
+    }
+
+    @objc func cleanUpDisplays() {
+        debugLog("Manual cleanup requested by user")
+        StatusWindowController.shared.show(message: "Cleaning up phantom displays...")
+
+        // Reset mirroring and destroy any in-process displays
+        let manager = VirtualDisplayManager.shared()
+        manager.resetAllMirroring()
+        manager.destroyAllVirtualDisplays()
+
+        isActive = false
+        currentPresetName = ""
+        currentVirtualID = 0
+
+        // Clear saved preset so it doesn't auto-restore the orphaned state
+        UserDefaults.standard.removeObject(forKey: kLastPresetKey)
+
+        StatusWindowController.shared.updateStatus("Restarting to finish cleanup...")
+
+        // Restart the app — macOS reclaims virtual displays from the dead process
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
+            markCleanupRestart()
+            relaunchApp()
+        }
     }
 
     @objc func disableHiDPIAction() {
