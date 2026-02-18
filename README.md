@@ -29,7 +29,7 @@ G9 Helper creates a virtual display with HiDPI enabled at your preferred resolut
 
 ### Download
 
-1. Download [`G9.Helper-v1.0.9.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.0.9/G9.Helper-v1.0.9.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
+1. Download [`G9.Helper-v1.1.0.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.1.0/G9.Helper-v1.1.0.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases)
 2. Open the DMG and drag **G9 Helper** to **Applications**
 3. Launch from Applications or Spotlight
 4. Look for the display icon in your menu bar
@@ -56,16 +56,25 @@ macOS may block the app on first run. Right-click the app, select "Open", then c
 
 To disable, click the menu bar icon and select **Disable HiDPI**.
 
+### Custom Scale
+
+Each monitor submenu includes a **Custom Scale...** option that opens a slider where you can dial in any scale factor from 1.1x to 2.0x. The resolution preview updates in real time as you drag.
+
 ## Resolution Presets
 
 ### Samsung G9 57" (7680x2160)
 
-| Preset | Effective Resolution | Notes |
-|--------|---------------------|-------|
-| Native 2x | 3840x1080 | Largest UI, sharpest text |
-| 5120x1440 | 5120x1440 | Best balance (recommended) |
-| 4800x1350 | 4800x1350 | Slightly larger UI |
-| 4480x1260 | 4480x1260 | Larger UI elements |
+| Preset | Effective Resolution | Scale | Notes |
+|--------|---------------------|-------|-------|
+| 6144x1728 | 6144x1728 | 1.25x | More space |
+| 5908x1662 | 5908x1662 | 1.3x | |
+| 5632x1584 | 5632x1584 | 1.36x | |
+| 5486x1543 | 5486x1543 | 1.4x | |
+| 5297x1490 | 5297x1490 | 1.45x | |
+| 5120x1440 | 5120x1440 | 1.5x | Best balance (recommended) |
+| 4800x1350 | 4800x1350 | 1.6x | Slightly larger UI |
+| 4389x1234 | 4389x1234 | 1.75x | |
+| 3840x1080 | 3840x1080 | 2.0x | Larger text |
 
 ### Samsung G9 49" (5120x1440)
 
@@ -80,26 +89,32 @@ The app includes built-in crash recovery. If enabled, your HiDPI settings will a
 
 ### Enable Auto-Start (Recommended)
 
-```bash
-cd /path/to/HiDPIVirtualDisplay/App
-./install-launchd.sh install
-```
+**From the app (easiest):**
+
+1. Click the G9 Helper icon in your menu bar
+2. Go to **Settings**
+3. Toggle **Start at Login**
 
 This will:
 - Start G9 Helper automatically at login
 - Auto-restart if the app crashes
 - Automatically restore your last HiDPI preset
 
+**From the command line (build from source only):**
+
+If you built from source, you can also use the shell script:
+
+```bash
+cd /path/to/HiDPIVirtualDisplay/App
+./install-launchd.sh install
+```
+
 ### Disable Auto-Start
+
+Toggle off **Start at Login** in Settings, or if you used the shell script:
 
 ```bash
 ./install-launchd.sh uninstall
-```
-
-### Check Status
-
-```bash
-./install-launchd.sh status
 ```
 
 ## Requirements
@@ -116,7 +131,7 @@ This will:
 
 The app uses private macOS APIs for virtual display creation. These APIs have internal memory management that can occasionally cause crashes. The app is designed to handle this gracefully:
 
-1. **Auto-restart**: With the launch agent installed, crashes restart automatically within seconds
+1. **Auto-restart**: With **Start at Login** enabled (Settings menu), crashes restart automatically within seconds
 2. **State preservation**: Your preset is saved and restored on restart
 3. **Transparent recovery**: Most users won't notice the brief restart
 
@@ -131,10 +146,7 @@ This is a known limitation of using private APIs. The display configuration pers
 
 ## Uninstall
 
-1. Remove auto-start (if enabled):
-   ```bash
-   ./install-launchd.sh uninstall
-   ```
+1. Disable auto-start: Click menu bar icon → Settings → toggle off **Start at Login**
 2. Click the G9 Helper menu bar icon and select **Quit**
 3. Drag **G9 Helper.app** from Applications to Trash
 4. Empty Trash
@@ -172,10 +184,7 @@ HiDPIVirtualDisplay/
 
 **Monitor flickers**: Go to Settings > Refresh Rate and set it to match your monitor's refresh rate manually. Most monitors work fine with Auto, but some high-refresh displays (165Hz, 240Hz) may need the manual setting.
 
-**Frequent crashes**: Install the launch agent for automatic recovery:
-```bash
-./install-launchd.sh install
-```
+**Frequent crashes**: Enable auto-restart via Settings > **Start at Login** in the menu bar. This installs a launch agent that automatically restarts the app after a crash.
 
 ## How It Works
 

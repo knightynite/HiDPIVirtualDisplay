@@ -25,6 +25,246 @@ func debugLog(_ message: String) {
     }
 }
 
+// MARK: - Launch Agent Manager
+
+class LaunchAgentManager {
+    static let shared = LaunchAgentManager()
+
+    private let plistName = "com.hidpi.g9helper.plist"
+
+    private var plistPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/LaunchAgents/\(plistName)"
+    }
+
+    var isInstalled: Bool {
+        FileManager.default.fileExists(atPath: plistPath)
+    }
+
+    /// Install the launch agent plist. The plist is written with RunAtLoad
+    /// for next-login startup, but we skip `launchctl load` while the app
+    /// is already running to avoid spawning a duplicate instance.
+    func install() -> Bool {
+        // Create LaunchAgents directory if needed
+        let dir = (plistPath as NSString).deletingLastPathComponent
+        do {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        } catch {
+            debugLog("Failed to create LaunchAgents directory: \(error)")
+            return false
+        }
+
+        // Use the installed app's executable path (not the running one, in case we're in a build dir)
+        let execPath = "/Applications/G9 Helper.app/Contents/MacOS/HiDPIDisplay"
+
+        let plistContent = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>Label</key>
+                <string>com.hidpi.g9helper</string>
+                <key>ProgramArguments</key>
+                <array>
+                    <string>\(execPath)</string>
+                </array>
+                <key>RunAtLoad</key>
+                <true/>
+                <key>KeepAlive</key>
+                <dict>
+                    <key>SuccessfulExit</key>
+                    <false/>
+                    <key>Crashed</key>
+                    <true/>
+                </dict>
+                <key>ThrottleInterval</key>
+                <integer>5</integer>
+                <key>StandardOutPath</key>
+                <string>/tmp/g9helper.log</string>
+                <key>StandardErrorPath</key>
+                <string>/tmp/g9helper.log</string>
+                <key>ProcessType</key>
+                <string>Interactive</string>
+            </dict>
+            </plist>
+            """
+
+        do {
+            try plistContent.write(toFile: plistPath, atomically: true, encoding: .utf8)
+        } catch {
+            debugLog("Failed to write launch agent plist: \(error)")
+            return false
+        }
+
+        // Don't call `launchctl load` here — RunAtLoad would immediately
+        // spawn a second instance while we're already running. The plist
+        // is in place and launchd will pick it up on next login. The
+        // KeepAlive/Crashed setting will also work after the next reboot.
+        debugLog("Launch agent plist installed (will activate on next login)")
+        return true
+    }
+
+    func uninstall() -> Bool {
+        // Unload the agent first
+        let unload = Process()
+        unload.launchPath = "/bin/launchctl"
+        unload.arguments = ["unload", plistPath]
+        do {
+            try unload.run()
+            unload.waitUntilExit()
+            if unload.terminationStatus != 0 {
+                debugLog("launchctl unload returned status \(unload.terminationStatus)")
+                // Agent might not be loaded (e.g., fresh install before reboot) — continue with file removal
+            }
+        } catch {
+            debugLog("launchctl unload failed to run: \(error)")
+        }
+
+        // Remove the plist file
+        do {
+            try FileManager.default.removeItem(atPath: plistPath)
+            debugLog("Launch agent uninstalled")
+            return true
+        } catch {
+            debugLog("Failed to remove launch agent plist: \(error)")
+            return false
+        }
+    }
+}
+
+// MARK: - Custom Scale Window
+
+class CustomScaleWindowController {
+    private var window: NSWindow?
+    private var slider: NSSlider?
+    private var scaleValueLabel: NSTextField?
+    private var resolutionLabel: NSTextField?
+    private var nativeWidth: UInt32 = 0
+    private var nativeHeight: UInt32 = 0
+    private var ppi: UInt32 = 140
+    private var applyCallback: ((PresetConfig) -> Void)?
+
+    static let shared = CustomScaleWindowController()
+
+    func show(nativeWidth: UInt32, nativeHeight: UInt32, ppi: UInt32, onApply: @escaping (PresetConfig) -> Void) {
+        self.nativeWidth = nativeWidth
+        self.nativeHeight = nativeHeight
+        self.ppi = ppi
+        self.applyCallback = onApply
+
+        DispatchQueue.main.async { [weak self] in
+            self?.createAndShowWindow()
+        }
+    }
+
+    private func createAndShowWindow() {
+        // Close any existing window
+        window?.close()
+
+        let windowRect = NSRect(x: 0, y: 0, width: 420, height: 180)
+        let window = NSWindow(
+            contentRect: windowRect,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Custom Scale"
+        window.level = .floating
+        window.center()
+
+        let contentView = NSView(frame: windowRect)
+
+        // Native resolution label
+        let titleLabel = NSTextField(labelWithString: "Native: \(nativeWidth)×\(nativeHeight)")
+        titleLabel.frame = NSRect(x: 20, y: 145, width: 380, height: 20)
+        titleLabel.font = NSFont.boldSystemFont(ofSize: 13)
+        contentView.addSubview(titleLabel)
+
+        // Scale factor row
+        let scaleLabel = NSTextField(labelWithString: "Scale:")
+        scaleLabel.frame = NSRect(x: 20, y: 108, width: 50, height: 20)
+        scaleLabel.font = NSFont.systemFont(ofSize: 12)
+        contentView.addSubview(scaleLabel)
+
+        let slider = NSSlider(value: 1.4, minValue: 1.1, maxValue: 2.0, target: self, action: #selector(sliderChanged(_:)))
+        slider.frame = NSRect(x: 75, y: 108, width: 260, height: 20)
+        slider.isContinuous = true
+        contentView.addSubview(slider)
+        self.slider = slider
+
+        let scaleValueLabel = NSTextField(labelWithString: "1.40x")
+        scaleValueLabel.frame = NSRect(x: 345, y: 108, width: 55, height: 20)
+        scaleValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        contentView.addSubview(scaleValueLabel)
+        self.scaleValueLabel = scaleValueLabel
+
+        // Resolution preview
+        let logicalW = UInt32(Double(nativeWidth) / 1.4)
+        let logicalH = UInt32(Double(nativeHeight) / 1.4)
+        let resLabel = NSTextField(labelWithString: "Resolution: \(logicalW)×\(logicalH) HiDPI")
+        resLabel.frame = NSRect(x: 20, y: 75, width: 380, height: 20)
+        resLabel.font = NSFont.systemFont(ofSize: 13)
+        resLabel.textColor = NSColor.secondaryLabelColor
+        contentView.addSubview(resLabel)
+        self.resolutionLabel = resLabel
+
+        // Apply button
+        let applyButton = NSButton(title: "Apply", target: self, action: #selector(applyClicked(_:)))
+        applyButton.frame = NSRect(x: 300, y: 20, width: 100, height: 32)
+        applyButton.bezelStyle = .rounded
+        applyButton.keyEquivalent = "\r"
+        contentView.addSubview(applyButton)
+
+        // Cancel button
+        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelClicked(_:)))
+        cancelButton.frame = NSRect(x: 190, y: 20, width: 100, height: 32)
+        cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
+        contentView.addSubview(cancelButton)
+
+        window.contentView = contentView
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        self.window = window
+    }
+
+    @objc func sliderChanged(_ sender: NSSlider) {
+        let scale = (sender.doubleValue * 100).rounded() / 100
+        let logicalW = UInt32(Double(nativeWidth) / scale)
+        let logicalH = UInt32(Double(nativeHeight) / scale)
+
+        scaleValueLabel?.stringValue = String(format: "%.2fx", scale)
+        resolutionLabel?.stringValue = "Resolution: \(logicalW)×\(logicalH) HiDPI"
+    }
+
+    @objc func applyClicked(_ sender: NSButton) {
+        guard let slider = slider else { return }
+        let scale = (slider.doubleValue * 100).rounded() / 100
+
+        let logicalW = UInt32(Double(nativeWidth) / scale)
+        let logicalH = UInt32(Double(nativeHeight) / scale)
+
+        let config = PresetConfig(
+            name: "Custom-\(logicalW)x\(logicalH)",
+            width: logicalW * 2,
+            height: logicalH * 2,
+            logicalWidth: logicalW,
+            logicalHeight: logicalH,
+            ppi: ppi,
+            hiDPI: true
+        )
+
+        window?.close()
+        window = nil
+        applyCallback?(config)
+    }
+
+    @objc func cancelClicked(_ sender: NSButton) {
+        window?.close()
+        window = nil
+    }
+}
+
 // MARK: - Status Window
 
 class StatusWindowController {
@@ -823,7 +1063,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func restorePreset(_ presetName: String) {
         let migratedName = migratePresetName(presetName)
-        guard let config = presetConfigs[migratedName] else {
+        let config: PresetConfig
+
+        if let standard = presetConfigs[migratedName] {
+            config = standard
+        } else if presetName.hasPrefix("custom-"),
+                  let dict = UserDefaults.standard.dictionary(forKey: "customPresetConfig"),
+                  let name = dict["name"] as? String,
+                  let width = (dict["width"] as? NSNumber)?.uint32Value,
+                  let height = (dict["height"] as? NSNumber)?.uint32Value,
+                  let logicalWidth = (dict["logicalWidth"] as? NSNumber)?.uint32Value,
+                  let logicalHeight = (dict["logicalHeight"] as? NSNumber)?.uint32Value,
+                  let ppi = (dict["ppi"] as? NSNumber)?.uint32Value,
+                  let hiDPI = dict["hiDPI"] as? Bool {
+            config = PresetConfig(name: name, width: width, height: height, logicalWidth: logicalWidth, logicalHeight: logicalHeight, ppi: ppi, hiDPI: hiDPI)
+        } else {
             debugLog("ERROR: Unknown preset for restore: \(presetName) (migrated: \(migratedName))")
             return
         }
@@ -960,10 +1214,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let g9Menu = NSMenu()
         addPresetItem(to: g9Menu, preset: "g9-57-6144x1728", title: "6144×1728 (1.25x) - More Space")
         addPresetItem(to: g9Menu, preset: "g9-57-5908x1662", title: "5908×1662 (1.3x)")
+        addPresetItem(to: g9Menu, preset: "g9-57-5632x1584", title: "5632×1584 (1.36x)")
+        addPresetItem(to: g9Menu, preset: "g9-57-5486x1543", title: "5486×1543 (1.4x)")
+        addPresetItem(to: g9Menu, preset: "g9-57-5297x1490", title: "5297×1490 (1.45x)")
         addPresetItem(to: g9Menu, preset: "g9-57-5120x1440", title: "5120×1440 (1.5x) ★ Recommended")
         addPresetItem(to: g9Menu, preset: "g9-57-4800x1350", title: "4800×1350 (1.6x)")
         addPresetItem(to: g9Menu, preset: "g9-57-4389x1234", title: "4389×1234 (1.75x)")
         addPresetItem(to: g9Menu, preset: "g9-57-3840x1080", title: "3840×1080 (2.0x) - Larger Text")
+        addCustomScaleItem(to: g9Menu, nativeWidth: 7680, nativeHeight: 2160, ppi: 140)
 
         let g9Item = NSMenuItem(title: "Samsung G9 57\"", action: nil, keyEquivalent: "")
         g9Item.submenu = g9Menu
@@ -977,6 +1235,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         addPresetItem(to: g49Menu, preset: "g9-49-3413x960", title: "3413×960 (1.5x)")
         addPresetItem(to: g49Menu, preset: "g9-49-2926x823", title: "2926×823 (1.75x)")
         addPresetItem(to: g49Menu, preset: "g9-49-2560x720", title: "2560×720 (2.0x) - Larger Text")
+        addCustomScaleItem(to: g49Menu, nativeWidth: 5120, nativeHeight: 1440, ppi: 109)
 
         let g49Item = NSMenuItem(title: "Samsung G9 49\"", action: nil, keyEquivalent: "")
         g49Item.submenu = g49Menu
@@ -989,6 +1248,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         addPresetItem(to: uwMenu, preset: "uw34-2293x960", title: "2293×960 (1.5x) ★ Recommended")
         addPresetItem(to: uwMenu, preset: "uw34-1966x823", title: "1966×823 (1.75x)")
         addPresetItem(to: uwMenu, preset: "uw34-1720x720", title: "1720×720 (2.0x) - Larger Text")
+        addCustomScaleItem(to: uwMenu, nativeWidth: 3440, nativeHeight: 1440, ppi: 110)
 
         let uwItem = NSMenuItem(title: "34\" Ultrawide (3440×1440)", action: nil, keyEquivalent: "")
         uwItem.submenu = uwMenu
@@ -1001,6 +1261,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         addPresetItem(to: uw38Menu, preset: "uw38-2560x1067", title: "2560×1067 (1.5x) ★ Recommended")
         addPresetItem(to: uw38Menu, preset: "uw38-2194x914", title: "2194×914 (1.75x)")
         addPresetItem(to: uw38Menu, preset: "uw38-1920x800", title: "1920×800 (2.0x) - Larger Text")
+        addCustomScaleItem(to: uw38Menu, nativeWidth: 3840, nativeHeight: 1600, ppi: 110)
 
         let uw38Item = NSMenuItem(title: "38\" Ultrawide (3840×1600)", action: nil, keyEquivalent: "")
         uw38Item.submenu = uw38Menu
@@ -1013,6 +1274,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         addPresetItem(to: k4Menu, preset: "4k-2560x1440", title: "2560×1440 (1.5x) ★ Recommended")
         addPresetItem(to: k4Menu, preset: "4k-2194x1234", title: "2194×1234 (1.75x)")
         addPresetItem(to: k4Menu, preset: "4k-1920x1080", title: "1920×1080 (2.0x) - Larger Text")
+        addCustomScaleItem(to: k4Menu, nativeWidth: 3840, nativeHeight: 2160, ppi: 163)
 
         let k4Item = NSMenuItem(title: "4K Displays (3840×2160)", action: nil, keyEquivalent: "")
         k4Item.submenu = k4Menu
@@ -1022,6 +1284,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Settings submenu
         let settingsMenu = NSMenu()
+
+        let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin(_:)), keyEquivalent: "")
+        startAtLoginItem.target = self
+        startAtLoginItem.state = LaunchAgentManager.shared.isInstalled ? .on : .off
+        settingsMenu.addItem(startAtLoginItem)
 
         let autoApplyItem = NSMenuItem(title: "Auto-Apply on Reconnect", action: #selector(toggleAutoApply(_:)), keyEquivalent: "")
         autoApplyItem.target = self
@@ -1083,6 +1350,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
+    @objc func toggleStartAtLogin(_ sender: NSMenuItem) {
+        let wasInstalled = LaunchAgentManager.shared.isInstalled
+        let success: Bool
+        if wasInstalled {
+            success = LaunchAgentManager.shared.uninstall()
+            debugLog("Start at Login disabled: \(success)")
+        } else {
+            success = LaunchAgentManager.shared.install()
+            debugLog("Start at Login enabled: \(success)")
+        }
+        rebuildMenu()
+        if !success {
+            let alert = NSAlert()
+            alert.messageText = wasInstalled ? "Could Not Disable Start at Login" : "Could Not Enable Start at Login"
+            alert.informativeText = "Make sure G9 Helper.app is installed in /Applications and try again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
     @objc func toggleAutoApply(_ sender: NSMenuItem) {
         let current = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
         UserDefaults.standard.set(!current, forKey: kAutoApplyOnConnectKey)
@@ -1118,7 +1406,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.0.9
+            Version 1.1.0
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -1134,6 +1422,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         item.target = self
         item.representedObject = preset
         menu.addItem(item)
+    }
+
+    func addCustomScaleItem(to menu: NSMenu, nativeWidth: UInt32, nativeHeight: UInt32, ppi: UInt32) {
+        menu.addItem(NSMenuItem.separator())
+        let item = NSMenuItem(title: "Custom Scale...", action: #selector(showCustomScale(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = ["width": nativeWidth, "height": nativeHeight, "ppi": ppi] as [String: UInt32]
+        menu.addItem(item)
+    }
+
+    @objc func showCustomScale(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: UInt32],
+              let nativeW = info["width"],
+              let nativeH = info["height"],
+              let ppi = info["ppi"] else { return }
+
+        CustomScaleWindowController.shared.show(nativeWidth: nativeW, nativeHeight: nativeH, ppi: ppi) { [weak self] config in
+            self?.applyCustomConfig(config)
+        }
+    }
+
+    func applyCustomConfig(_ config: PresetConfig) {
+        isSettingUp = true
+        StatusWindowController.shared.show(message: "Preparing display configuration...")
+
+        let manager = VirtualDisplayManager.shared()
+        manager.resetAllMirroring()
+        manager.destroyAllVirtualDisplays()
+        currentVirtualID = 0
+        isActive = false
+        currentPresetName = ""
+
+        // Save custom config to UserDefaults for crash recovery
+        let presetKey = "custom-\(config.logicalWidth)x\(config.logicalHeight)"
+        let customDict: [String: Any] = [
+            "name": config.name,
+            "width": config.width,
+            "height": config.height,
+            "logicalWidth": config.logicalWidth,
+            "logicalHeight": config.logicalHeight,
+            "ppi": config.ppi,
+            "hiDPI": config.hiDPI
+        ]
+        UserDefaults.standard.set(customDict, forKey: "customPresetConfig")
+        saveCurrentPreset(presetKey)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            autoreleasepool {
+                self?.createVirtualDisplayAsync(config: config)
+            }
+        }
     }
 
     @objc func applyPreset(_ sender: NSMenuItem) {
@@ -1394,6 +1733,9 @@ let presetConfigs: [String: PresetConfig] = [
     // Scale factor = native / logical, e.g., 7680/5120 = 1.5x
     "g9-57-6144x1728": PresetConfig(name: "G9-57-6144", width: 12288, height: 3456, logicalWidth: 6144, logicalHeight: 1728, ppi: 140, hiDPI: true),  // 1.25x
     "g9-57-5908x1662": PresetConfig(name: "G9-57-5908", width: 11816, height: 3324, logicalWidth: 5908, logicalHeight: 1662, ppi: 140, hiDPI: true),  // 1.3x
+    "g9-57-5632x1584": PresetConfig(name: "G9-57-5632", width: 11264, height: 3168, logicalWidth: 5632, logicalHeight: 1584, ppi: 140, hiDPI: true),  // 1.36x
+    "g9-57-5486x1543": PresetConfig(name: "G9-57-5486", width: 10972, height: 3086, logicalWidth: 5486, logicalHeight: 1543, ppi: 140, hiDPI: true),  // 1.4x
+    "g9-57-5297x1490": PresetConfig(name: "G9-57-5297", width: 10594, height: 2980, logicalWidth: 5297, logicalHeight: 1490, ppi: 140, hiDPI: true),  // 1.45x
     "g9-57-5120x1440": PresetConfig(name: "G9-57-5120", width: 10240, height: 2880, logicalWidth: 5120, logicalHeight: 1440, ppi: 140, hiDPI: true),  // 1.5x (recommended)
     "g9-57-4800x1350": PresetConfig(name: "G9-57-4800", width: 9600, height: 2700, logicalWidth: 4800, logicalHeight: 1350, ppi: 140, hiDPI: true),   // 1.6x
     "g9-57-4389x1234": PresetConfig(name: "G9-57-4389", width: 8778, height: 2468, logicalWidth: 4389, logicalHeight: 1234, ppi: 140, hiDPI: true),   // 1.75x
