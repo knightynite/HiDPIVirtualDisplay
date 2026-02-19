@@ -133,9 +133,10 @@ The app uses private macOS APIs for virtual display creation. These APIs have in
 
 1. **Auto-restart**: With **Start at Login** enabled (Settings menu), crashes restart automatically within seconds
 2. **State preservation**: Your preset is saved and restored on restart
-3. **Transparent recovery**: Most users won't notice the brief restart
+3. **Phantom cleanup**: Orphaned virtual displays left behind by a crash are automatically detected and cleaned up on the next launch
+4. **Transparent recovery**: Most users won't notice the brief restart
 
-This is a known limitation of using private APIs. The display configuration persists through crashes.
+This is a known limitation of using private APIs.
 
 ## Limitations
 
@@ -143,6 +144,7 @@ This is a known limitation of using private APIs. The display configuration pers
 - May require re-enabling after sleep/wake cycles
 - Uses private macOS APIs (may break with future updates)
 - Refresh rate is auto-detected, but you can override it manually under Settings > Refresh Rate
+- Switching presets or disabling HiDPI causes a brief app restart (virtual displays can only be fully removed when the process exits)
 
 ## Uninstall
 
@@ -180,7 +182,7 @@ HiDPIVirtualDisplay/
 
 **Display issues after changing monitor settings**: Quit and relaunch the app.
 
-**Virtual display persists after quit**: Restart your Mac to clear orphaned displays.
+**Phantom displays in System Settings**: The app auto-cleans orphaned virtual displays on launch. If you still see extras, click the menu bar icon and select **Clean Up Phantom Displays**.
 
 **Monitor flickers**: Go to Settings > Refresh Rate and set it to match your monitor's refresh rate manually. Most monitors work fine with Auto, but some high-refresh displays (165Hz, 240Hz) may need the manual setting.
 
