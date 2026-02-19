@@ -664,6 +664,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Track if we're in the middle of setting up HiDPI (don't trigger cleanup during setup)
     private var isSettingUp = false
+    private var isRestarting = false
 
     // Display change observer
     private var displayObserver: Any?
@@ -763,8 +764,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func periodicDisplayCheck() {
-        // Don't trigger cleanup during setup
-        if isSettingUp { return }
+        // Don't trigger cleanup during setup or pending restart
+        if isSettingUp || isRestarting { return }
 
         let realMonitor = findRealPhysicalMonitor()
 
@@ -838,9 +839,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func handleDisplayConfigurationChange() {
         debugLog("Display configuration changed, checking state...")
 
-        // Don't trigger cleanup during setup
-        if isSettingUp {
-            debugLog("Setup in progress, skipping disconnect check")
+        // Don't trigger cleanup during setup or pending restart
+        if isSettingUp || isRestarting {
+            debugLog("Setup/restart in progress, skipping disconnect check")
             return
         }
 
@@ -920,6 +921,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         for i in 0..<Int(displayCount) {
             let displayID = displayList[i]
+            // Skip the display we currently own — it's not orphaned
+            if currentVirtualID != 0 && displayID == currentVirtualID { continue }
             let vendorID = CGDisplayVendorNumber(displayID)
             // Our virtual displays use vendor ID 0x1234 (4660 decimal)
             if vendorID == 0x1234 {
@@ -1483,16 +1486,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applyCustomConfig(_ config: PresetConfig) {
-        isSettingUp = true
-        StatusWindowController.shared.show(message: "Preparing display configuration...")
-
-        let manager = VirtualDisplayManager.shared()
-        manager.resetAllMirroring()
-        manager.destroyAllVirtualDisplays()
-        currentVirtualID = 0
-        isActive = false
-        currentPresetName = ""
-
         // Save custom config to UserDefaults for crash recovery
         let presetKey = "custom-\(config.logicalWidth)x\(config.logicalHeight)"
         let customDict: [String: Any] = [
@@ -1506,6 +1499,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ]
         UserDefaults.standard.set(customDict, forKey: "customPresetConfig")
         saveCurrentPreset(presetKey)
+
+        // If a virtual display is already active, restart to switch cleanly
+        if isActive || hasOrphanedVirtualDisplay() {
+            debugLog("Active display exists, restarting to apply custom config cleanly...")
+            isRestarting = true
+            StatusWindowController.shared.show(message: "Switching preset...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                relaunchApp()
+            }
+            return
+        }
+
+        isSettingUp = true
+        StatusWindowController.shared.show(message: "Preparing display configuration...")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             autoreleasepool {
@@ -1523,20 +1530,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // If a virtual display is already active, we must restart the app to switch.
+        // CGVirtualDisplay objects persist until the process exits — releasing them
+        // does NOT remove the display. Restarting lets macOS reclaim the old one,
+        // and checkAndRestoreFromCrash() applies the new preset on relaunch.
+        if isActive || hasOrphanedVirtualDisplay() {
+            debugLog("Active display exists, saving new preset and restarting to switch cleanly...")
+            isRestarting = true
+            StatusWindowController.shared.show(message: "Switching preset...")
+            saveCurrentPreset(presetName)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                relaunchApp()
+            }
+            return
+        }
+
         // Mark that we're setting up (don't trigger cleanup during setup)
         isSettingUp = true
 
         // Show status window
         StatusWindowController.shared.show(message: "Preparing display configuration...")
-
-        // First, completely reset display state
-        debugLog("Resetting display configuration...")
-        let manager = VirtualDisplayManager.shared()
-        manager.resetAllMirroring()
-        manager.destroyAllVirtualDisplays()
-        currentVirtualID = 0
-        isActive = false
-        currentPresetName = ""
 
         // Save the preset for crash recovery
         saveCurrentPreset(presetName)
@@ -1733,6 +1746,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func cleanUpDisplays() {
         debugLog("Manual cleanup requested by user")
+        isRestarting = true
         StatusWindowController.shared.show(message: "Cleaning up phantom displays...")
 
         // Reset mirroring and destroy any in-process displays
@@ -1744,8 +1758,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         currentPresetName = ""
         currentVirtualID = 0
 
-        // Clear saved preset so it doesn't auto-restore the orphaned state
-        UserDefaults.standard.removeObject(forKey: kLastPresetKey)
+        // Keep kLastPresetKey — user wants to clean phantoms, not lose their preset.
+        // checkAndRestoreFromCrash() will re-apply it after the restart.
 
         StatusWindowController.shared.updateStatus("Restarting to finish cleanup...")
 
@@ -1757,14 +1771,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func disableHiDPIAction() {
-        StatusWindowController.shared.show(message: "Disabling HiDPI...")
+        // Virtual displays persist until process exit — must restart to truly remove them
+        if isActive || hasOrphanedVirtualDisplay() {
+            StatusWindowController.shared.show(message: "Disabling HiDPI...")
+            isRestarting = true
+            // Clear preset so relaunch does NOT restore
+            clearSavedPreset()
+            wasDisconnected = false
+            UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                relaunchApp()
+            }
+            return
+        }
+        // No active display — just clean up in-process state
         disableHiDPISync()
         rebuildMenu()
-
-        StatusWindowController.shared.updateStatus("HiDPI disabled")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            StatusWindowController.shared.hide()
-        }
     }
 
     @objc func quitApp() {
