@@ -662,6 +662,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Track if we're waiting for monitor reconnection
     private var wasDisconnected = false
 
+    // Cache for skipping redundant display enumeration
+    private var lastDisplayCount: UInt32 = 0
+    private var lastRealMonitorID: CGDirectDisplayID = 0
+
     // Track if we're in the middle of setting up HiDPI (don't trigger cleanup during setup)
     private var isSettingUp = false
     private var isRestarting = false
@@ -731,8 +735,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleDisplayConfigurationChange()
         }
 
-        // Also add a periodic check as backup (every 3 seconds)
-        displayCheckTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        // Backup timer — notifications handle most changes, this catches edge cases
+        displayCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             self?.periodicDisplayCheck()
         }
 
@@ -767,7 +771,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Don't trigger cleanup during setup or pending restart
         if isSettingUp || isRestarting { return }
 
+        // Skip if nothing changed since last check
+        var rawDisplayList = [CGDirectDisplayID](repeating: 0, count: 32)
+        var currentDisplayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &rawDisplayList, &currentDisplayCount)
+
+        if isActive && currentDisplayCount == lastDisplayCount && lastRealMonitorID != 0 {
+            return
+        }
+
         let realMonitor = findRealPhysicalMonitor()
+
+        lastDisplayCount = currentDisplayCount
+        lastRealMonitorID = realMonitor ?? 0
 
         // Case 1: HiDPI active but monitor disconnected
         if isActive && realMonitor == nil {
@@ -812,7 +828,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Check if external display is connected
-        guard findRealPhysicalMonitor() != nil else {
+        guard findRealPhysicalMonitor(verbose: true) != nil else {
             debugLog("Wake: No external monitor found, skipping restore")
             return
         }
@@ -849,7 +865,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if isActive && currentVirtualID != 0 {
             // Only check if the real physical monitor is still connected
             // Don't check mirroring status - macOS can break mirroring unexpectedly
-            let realMonitor = findRealPhysicalMonitor()
+            let realMonitor = findRealPhysicalMonitor(verbose: true)
 
             if realMonitor == nil {
                 debugLog("Physical monitor disconnected (no real monitor found) - cleaning up")
@@ -863,7 +879,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Case 2: HiDPI is not active, check if monitor was reconnected
-        let realMonitor = findRealPhysicalMonitor()
+        let realMonitor = findRealPhysicalMonitor(verbose: true)
         if !isActive && realMonitor != nil && wasDisconnected {
             debugLog("External display reconnected")
 
@@ -885,9 +901,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Find a real physical monitor (not built-in, not a virtual display we created)
-    // Our virtual displays use vendor ID 0x1234 - real monitors have real vendor IDs
-    func findRealPhysicalMonitor() -> CGDirectDisplayID? {
+    // Find a real physical monitor (not built-in, not our virtual display vendor 0x1234)
+    func findRealPhysicalMonitor(verbose: Bool = false) -> CGDirectDisplayID? {
         var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
         var displayCount: UInt32 = 0
         CGGetOnlineDisplayList(32, &displayList, &displayCount)
@@ -896,20 +911,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let vendorID = CGDisplayVendorNumber(displayID)
-            let size = CGDisplayScreenSize(displayID)
 
             // Our virtual displays use vendor ID 0x1234 (4660 decimal)
             let isVirtualDisplay = vendorID == 0x1234
 
-            debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), size=\(size.width)mm")
+            if verbose {
+                // CGDisplayScreenSize on virtual displays kicks off ColorSync lookups that peg the CPU
+                if !isVirtualDisplay {
+                    let size = CGDisplayScreenSize(displayID)
+                    debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), size=\(size.width)mm")
+                } else {
+                    debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), size=skipped")
+                }
+            }
 
             // Real monitors are: not built-in, not a virtual display (vendor != 0x1234)
             if !isBuiltin && !isVirtualDisplay {
-                debugLog("Found real physical monitor: \(displayID) (vendor: \(vendorID))")
+                if verbose {
+                    debugLog("Found real physical monitor: \(displayID) (vendor: \(vendorID))")
+                }
                 return displayID
             }
         }
-        debugLog("No real physical monitor found")
+        if verbose {
+            debugLog("No real physical monitor found")
+        }
         return nil
     }
 
@@ -1448,7 +1474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.1.0
+            Version 1.1.1
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
