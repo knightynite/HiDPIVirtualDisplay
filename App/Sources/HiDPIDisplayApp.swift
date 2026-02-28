@@ -1474,7 +1474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.1.2
+            Version 1.1.3
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -1713,6 +1713,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             targetExternalDisplayID = externalID  // Track target for disconnect detection
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
+
+            // Verify actual backing scale after display configuration settles
+            if config.hiDPI {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.verifyBackingScale(externalID: externalID, config: config)
+                }
+            }
         } else {
             debugLog("Mirror failed, cleaning up...")
             manager.destroyVirtualDisplay(virtualID)
@@ -1732,6 +1739,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         rebuildMenu()
+    }
+
+    func verifyBackingScale(externalID: CGDirectDisplayID, config: PresetConfig) {
+        var actualScale: CGFloat = 0
+        var matchedScreen: NSScreen?
+
+        for screen in NSScreen.screens {
+            let deviceDesc = screen.deviceDescription
+            if let screenNumber = deviceDesc[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+                if screenNumber == externalID || screenNumber == currentVirtualID {
+                    matchedScreen = screen
+                    actualScale = screen.backingScaleFactor
+                    break
+                }
+            }
+        }
+
+        // Mirrors collapse into a single NSScreen, fall back to main
+        if matchedScreen == nil {
+            if let main = NSScreen.main {
+                matchedScreen = main
+                actualScale = main.backingScaleFactor
+            }
+        }
+
+        let isActuallyHiDPI = actualScale >= 2.0
+        debugLog("Backing scale verification: scale=\(actualScale), isHiDPI=\(isActuallyHiDPI)")
+
+        if let screen = matchedScreen {
+            let frame = screen.frame
+            let visibleFrame = screen.visibleFrame
+            debugLog("  Screen frame: \(frame.width)x\(frame.height), visible: \(visibleFrame.width)x\(visibleFrame.height)")
+        }
+
+        if isActuallyHiDPI {
+            debugLog("Verified: display is running at \(actualScale)x backing scale (true HiDPI)")
+            currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
+            StatusWindowController.shared.updateStatus("HiDPI active: \(config.logicalWidth)x\(config.logicalHeight) @\(Int(actualScale))x")
+        } else {
+            debugLog("WARNING: backing scale is \(actualScale)x — display is NOT in true HiDPI mode")
+            currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight) (1x)"
+            StatusWindowController.shared.updateStatus("\(config.logicalWidth)x\(config.logicalHeight) active (not HiDPI — \(actualScale)x scale)")
+        }
+
+        rebuildMenu()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            StatusWindowController.shared.hide()
+        }
     }
 
     func findExternalDisplay() -> CGDirectDisplayID? {
