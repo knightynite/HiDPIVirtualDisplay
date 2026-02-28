@@ -38,4 +38,7 @@ DerivedData/
 # Logs
 *.log
 
+# Claude Code
+.claude/
+
 # User-specific
