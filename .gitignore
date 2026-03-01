@@ -38,7 +38,8 @@ DerivedData/
 # Logs
 *.log
 
-# Claude Code
+# AI tooling
 .claude/
+.cursor/
 
 # User-specific
