@@ -670,6 +670,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isSettingUp = false
     private var isRestarting = false
 
+    // Track consecutive mirror failures to prevent infinite restart loops
+    private let kMirrorFailureCountKey = "consecutiveMirrorFailures"
+    private let maxMirrorRetries = 3
+
     // Display change observer
     private var displayObserver: Any?
     private var displayCheckTimer: Timer?
@@ -789,6 +793,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if isActive && realMonitor == nil {
             debugLog(">>> Periodic check: Physical monitor gone - cleaning up")
             wasDisconnected = true
+            UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)  // Reset for reconnection
             cleanupAfterDisconnect()
             return
         }
@@ -804,6 +809,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Case 2: HiDPI not active, monitor reconnected, auto-apply enabled
         if !isActive && wasDisconnected && realMonitor != nil {
+            let failCount = UserDefaults.standard.integer(forKey: kMirrorFailureCountKey)
+            if failCount >= maxMirrorRetries {
+                debugLog(">>> Periodic check: Monitor present but mirror failed \(failCount) times, not retrying (apply manually from menu)")
+                wasDisconnected = false
+                UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+                return
+            }
+
             let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
             if autoApply, let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey), !lastPreset.isEmpty {
                 debugLog(">>> Periodic check: Monitor reconnected - auto-applying \(lastPreset)")
@@ -833,6 +846,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Fresh attempt after wake — reset failure counter
+        UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)
         debugLog(">>> Wake: Restoring HiDPI preset after sleep: \(lastPreset)")
 
         // Mark as setting up to prevent other handlers from interfering
@@ -870,6 +885,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if realMonitor == nil {
                 debugLog("Physical monitor disconnected (no real monitor found) - cleaning up")
                 wasDisconnected = true
+                UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)  // Reset for reconnection
                 cleanupAfterDisconnect()
                 return
             } else {
@@ -881,6 +897,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Case 2: HiDPI is not active, check if monitor was reconnected
         let realMonitor = findRealPhysicalMonitor(verbose: true)
         if !isActive && realMonitor != nil && wasDisconnected {
+            let failCount = UserDefaults.standard.integer(forKey: kMirrorFailureCountKey)
+            if failCount >= maxMirrorRetries {
+                debugLog("Display reconnected but mirror failed \(failCount) times, not retrying (apply manually from menu)")
+                wasDisconnected = false
+                UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+                return
+            }
+
             debugLog("External display reconnected")
 
             let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
@@ -901,7 +925,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Find a real physical monitor (not built-in, not our virtual display vendor 0x1234)
+    // Find a real physical monitor (not built-in, not virtual, not a ghost/phantom display)
     func findRealPhysicalMonitor(verbose: Bool = false) -> CGDirectDisplayID? {
         var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
         var displayCount: UInt32 = 0
@@ -915,18 +939,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Our virtual displays use vendor ID 0x1234 (4660 decimal)
             let isVirtualDisplay = vendorID == 0x1234
 
+            // Vendor 0x756E6B6E (1970170734) = "unkn" in ASCII — macOS placeholder for
+            // displays whose EDID hasn't been read yet. These are ghost/phantom displays
+            // from Thunderbolt hubs, USB-C ports, or DisplayPort MST during initialization.
+            // Mirroring to them always fails.
+            let isGhostDisplay = vendorID == 0x756E6B6E
+
             if verbose {
                 // CGDisplayScreenSize on virtual displays kicks off ColorSync lookups that peg the CPU
                 if !isVirtualDisplay {
                     let size = CGDisplayScreenSize(displayID)
-                    debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), size=\(size.width)mm")
+                    debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), ghost=\(isGhostDisplay), size=\(size.width)mm")
                 } else {
                     debugLog("  Display \(displayID): builtin=\(isBuiltin), vendor=\(vendorID), virtual=\(isVirtualDisplay), size=skipped")
                 }
             }
 
-            // Real monitors are: not built-in, not a virtual display (vendor != 0x1234)
-            if !isBuiltin && !isVirtualDisplay {
+            // Real monitors are: not built-in, not virtual (0x1234), not ghost (0x756E6B6E "unkn")
+            if !isBuiltin && !isVirtualDisplay && !isGhostDisplay {
                 if verbose {
                     debugLog("Found real physical monitor: \(displayID) (vendor: \(vendorID))")
                 }
@@ -1512,6 +1542,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applyCustomConfig(_ config: PresetConfig) {
+        // User manually applying — reset failure counter for fresh attempt
+        UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)
         // Save custom config to UserDefaults for crash recovery
         let presetKey = "custom-\(config.logicalWidth)x\(config.logicalHeight)"
         let customDict: [String: Any] = [
@@ -1550,6 +1582,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func applyPreset(_ sender: NSMenuItem) {
         guard let presetName = sender.representedObject as? String else { return }
         debugLog(">>> Applying preset: \(presetName)")
+
+        // User manually applying — reset failure counter for fresh attempt
+        UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)
 
         guard let config = presetConfigs[presetName] else {
             debugLog("ERROR: Unknown preset \(presetName)")
@@ -1711,6 +1746,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             isActive = true
             currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
             targetExternalDisplayID = externalID  // Track target for disconnect detection
+            UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)  // Reset failure counter
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
 
@@ -1726,11 +1762,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             currentVirtualID = 0
             isActive = false
             currentPresetName = ""
-            // Set wasDisconnected so we retry when monitor is fully ready
-            wasDisconnected = true
-            UserDefaults.standard.set(true, forKey: kWasDisconnectedKey)
-            debugLog("Will retry when monitor is ready")
-            StatusWindowController.shared.updateStatus("Waiting for display...")
+
+            // Track consecutive failures to prevent infinite restart loops
+            let failCount = UserDefaults.standard.integer(forKey: kMirrorFailureCountKey) + 1
+            UserDefaults.standard.set(failCount, forKey: kMirrorFailureCountKey)
+
+            if failCount < maxMirrorRetries {
+                // Allow retry — set wasDisconnected so periodic check will auto-apply
+                wasDisconnected = true
+                UserDefaults.standard.set(true, forKey: kWasDisconnectedKey)
+                debugLog("Mirror failure \(failCount)/\(maxMirrorRetries), will retry when monitor is ready")
+                StatusWindowController.shared.updateStatus("Waiting for display...")
+            } else {
+                // Too many failures — stop the auto-retry loop
+                wasDisconnected = false
+                UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+                debugLog("Mirror failed \(failCount) times, stopping auto-retry. Use menu to apply manually.")
+                StatusWindowController.shared.updateStatus("Setup failed — apply manually from menu")
+            }
         }
 
         // Hide status window after a short delay
@@ -1805,9 +1854,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let vendorID = CGDisplayVendorNumber(displayID)
             let isVirtualDisplay = vendorID == 0x1234  // Our virtual displays use vendor 0x1234
+            let isGhostDisplay = vendorID == 0x756E6B6E  // "unkn" — phantom display without EDID
 
-            // Skip builtin displays and ANY virtual displays (by vendor ID)
-            if !isBuiltin && !isVirtualDisplay {
+            // Skip builtin, virtual, and ghost/phantom displays
+            if !isBuiltin && !isVirtualDisplay && !isGhostDisplay {
                 // Only call CGDisplayScreenSize on real displays — calling it on
                 // virtual displays triggers expensive ColorSync profile lookups
                 // that can deadlock colorsync.displayservices and freeze WindowServer.
