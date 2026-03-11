@@ -658,6 +658,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kAutoRestoreKey = "autoRestoreOnCrash"
     private let kAutoApplyOnConnectKey = "autoApplyOnConnect"
     private let kRefreshRateKey = "customRefreshRate"  // 0.0 = auto-detect
+    private let kBoundMonitorVendorKey = "boundMonitorVendor"
+    private let kBoundMonitorModelKey = "boundMonitorModel"
 
     // Track if we're waiting for monitor reconnection
     private var wasDisconnected = false
@@ -819,6 +821,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
             if autoApply, let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey), !lastPreset.isEmpty {
+                if !connectedMonitorMatchesSavedPreset() {
+                    debugLog(">>> Periodic check: Monitor present but doesn't match saved preset — skipping auto-apply")
+                    return
+                }
                 debugLog(">>> Periodic check: Monitor reconnected - auto-applying \(lastPreset)")
                 wasDisconnected = false
                 UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
@@ -843,6 +849,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Check if external display is connected
         guard findRealPhysicalMonitor(verbose: true) != nil else {
             debugLog("Wake: No external monitor found, skipping restore")
+            return
+        }
+
+        if !connectedMonitorMatchesSavedPreset() {
+            debugLog("Wake: Connected monitor doesn't match saved preset — skipping restore")
             return
         }
 
@@ -909,6 +920,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let autoApply = UserDefaults.standard.bool(forKey: kAutoApplyOnConnectKey)
             if autoApply, let lastPreset = UserDefaults.standard.string(forKey: kLastPresetKey), !lastPreset.isEmpty {
+                if !connectedMonitorMatchesSavedPreset() {
+                    debugLog("Display reconnected but doesn't match saved preset — skipping auto-apply")
+                    wasDisconnected = false
+                    UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
+                    return
+                }
                 debugLog("Auto-applying last preset: \(lastPreset)")
                 wasDisconnected = false
                 UserDefaults.standard.set(false, forKey: kWasDisconnectedKey)
@@ -1117,6 +1134,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                !lastPreset.isEmpty {
                 // Only restore if external display is connected
                 if findExternalDisplay() != nil {
+                    if !connectedMonitorMatchesSavedPreset() {
+                        debugLog("Detected restart after crash, but connected monitor doesn't match saved preset — skipping auto-restore")
+                        return
+                    }
                     debugLog("Detected restart after crash, auto-restoring preset: \(lastPreset)")
 
                     // Delay restoration to let the system settle
@@ -1504,7 +1525,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "G9 Helper"
         alert.informativeText = """
-            Version 1.1.3
+            Version 1.1.5
 
             Unlock crisp HiDPI scaling on Samsung Odyssey G9 and other large monitors.
 
@@ -1747,6 +1768,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
             targetExternalDisplayID = externalID  // Track target for disconnect detection
             UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)  // Reset failure counter
+            saveMonitorFingerprint(externalID)
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
 
@@ -1881,6 +1903,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         debugLog("  -> No external display found")
         return nil
+    }
+
+    func saveMonitorFingerprint(_ displayID: CGDirectDisplayID) {
+        let vendor = Int(CGDisplayVendorNumber(displayID))
+        let model = Int(CGDisplayModelNumber(displayID))
+        UserDefaults.standard.set(vendor, forKey: kBoundMonitorVendorKey)
+        UserDefaults.standard.set(model, forKey: kBoundMonitorModelKey)
+        debugLog("Saved monitor fingerprint: vendor=\(vendor), model=\(model)")
+    }
+
+    func connectedMonitorMatchesSavedPreset() -> Bool {
+        guard UserDefaults.standard.object(forKey: kBoundMonitorVendorKey) != nil else {
+            return true
+        }
+
+        let savedVendor = UserDefaults.standard.integer(forKey: kBoundMonitorVendorKey)
+        let savedModel = UserDefaults.standard.integer(forKey: kBoundMonitorModelKey)
+
+        guard let displayID = findRealPhysicalMonitor() else { return false }
+
+        let currentVendor = Int(CGDisplayVendorNumber(displayID))
+        let currentModel = Int(CGDisplayModelNumber(displayID))
+
+        let matches = (currentVendor == savedVendor && currentModel == savedModel)
+        if !matches {
+            debugLog("Monitor mismatch: saved=(\(savedVendor),\(savedModel)) current=(\(currentVendor),\(currentModel)) — skipping auto-apply")
+        }
+        return matches
     }
 
     @objc func cleanUpDisplays() {

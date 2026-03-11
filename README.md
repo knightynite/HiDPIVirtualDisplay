@@ -28,7 +28,7 @@ brew install knightynite/g9-helper/g9-helper
 
 ### Manual
 
-Grab [`G9.Helper-v1.1.3.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.1.3/G9.Helper-v1.1.3.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
+Grab [`G9.Helper-v1.1.5.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.1.5/G9.Helper-v1.1.5.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
 macOS will probably block it on first launch — right-click the app, hit "Open", confirm in the dialog.
 
@@ -71,6 +71,10 @@ Every monitor submenu has a **Custom Scale...** option — it opens a slider for
 |--------|-------|
 | 3840x1080 | Recommended |
 | 2560x720 | Native 2x |
+
+## Monitor-aware auto-apply
+
+When you apply a preset, G9 Helper remembers which monitor was connected (by vendor and model ID). Auto-apply on reconnect, crash recovery, and wake-from-sleep will only activate if the same monitor is plugged in. If you switch locations and plug into a different display, the app stays idle instead of trying to apply the wrong configuration. Manually applying a preset on a new monitor updates the binding.
 
 ## Auto-start & crash recovery
 
