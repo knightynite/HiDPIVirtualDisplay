@@ -39,7 +39,7 @@ struct DisplayPreset {
     }
 }
 
-// Generic presets for other monitors
+// Built-in presets
 let presets: [DisplayPreset] = [
     // Samsung G9 57" (7680x2160 native) - Fractional scaling options
     DisplayPreset(
