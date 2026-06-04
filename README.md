@@ -28,7 +28,7 @@ brew install knightynite/g9-helper/g9-helper
 
 ### Manual
 
-Grab [`G9.Helper-v1.1.5.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.1.5/G9.Helper-v1.1.5.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
+Grab [`G9.Helper-v1.2.0.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.0/G9.Helper-v1.2.0.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
 macOS will probably block it on first launch — right-click the app, hit "Open", confirm in the dialog.
 

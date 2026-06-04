@@ -7,7 +7,7 @@ APP_NAME="G9 Helper"
 DMG_NAME="G9.Helper"
 BUILD_DIR="build"
 DMG_DIR="${BUILD_DIR}/dmg"
-VERSION="1.1.4"
+VERSION="1.2.0"
 
 echo "Creating DMG..."
 

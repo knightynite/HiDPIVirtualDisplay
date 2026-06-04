@@ -7,6 +7,7 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #import <IOKit/IOKitLib.h>
+#import <dlfcn.h>
 
 // Compatibility for older SDKs
 #ifndef kIOMainPortDefault
@@ -211,17 +212,13 @@ static void retainWindowIfNeeded(NSWindow *window) {
         [mode retain];
         _mode = mode;
 
-        // Create modes array with target rate and 60 Hz fallback for better compatibility
+        // Single-mode array — adding a 60 Hz fallback caused macOS to silently
+        // pick the fallback over the requested rate after some mirror configs,
+        // making the virtual render at 60 Hz even when the user asked for 120
+        // (the panel scanned at 120 but content only updated 60 times/sec).
+        // The caller is now responsible for clamping the requested rate to a
+        // value the panel actually supports (via maxSupportedRefreshRate).
         NSMutableArray *modes = [NSMutableArray arrayWithObject:_mode];
-        if (refreshRate != 60.0) {
-            CGVirtualDisplayMode *fallbackMode = [[CGVirtualDisplayMode alloc] initWithWidth:modeWidth
-                                                                                      height:modeHeight
-                                                                                 refreshRate:60.0];
-            if (fallbackMode) {
-                [modes addObject:fallbackMode];
-                NSLog(@"VDM: Added 60 Hz fallback mode");
-            }
-        }
         _modesArray = [modes retain];
         _settings.modes = _modesArray;
 
@@ -310,9 +307,75 @@ static void retainWindowIfNeeded(NSWindow *window) {
 
 - (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
             toDisplay:(CGDirectDisplayID)targetDisplayID {
+    return [self mirrorDisplay:sourceDisplayID toDisplay:targetDisplayID atRate:0.0];
+}
 
-    NSLog(@"VDM: Mirror %u -> %u", sourceDisplayID, targetDisplayID);
+/// Find the largest-pixel-count mode on `displayID` whose refresh rate matches
+/// `refreshRate` within 0.5 Hz. Returns NULL if no match. Caller owns the
+/// returned mode and must release it via CGDisplayModeRelease().
+static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double refreshRate) {
+    NSDictionary *opts = @{ (__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES };
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
+    if (!modes) return NULL;
 
+    CGDisplayModeRef best = NULL;
+    size_t bestPixels = 0;
+    CFIndex count = CFArrayGetCount(modes);
+    for (CFIndex i = 0; i < count; i++) {
+        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        double rate = CGDisplayModeGetRefreshRate(mode);
+        if (fabs(rate - refreshRate) > 0.5) continue;
+        size_t pixels = CGDisplayModeGetWidth(mode) * CGDisplayModeGetHeight(mode);
+        if (pixels > bestPixels) {
+            bestPixels = pixels;
+            best = mode;
+        }
+    }
+    CGDisplayModeRef retained = best ? (CGDisplayModeRef)CGDisplayModeRetain(best) : NULL;
+    CFRelease(modes);
+    return retained;
+}
+
+- (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
+            toDisplay:(CGDirectDisplayID)targetDisplayID
+               atRate:(double)refreshRate {
+
+    NSLog(@"VDM: Mirror %u -> %u (pin target to %.1f Hz)",
+          sourceDisplayID, targetDisplayID, refreshRate);
+
+    // Step 1 — pin the physical target to a fixed-rate native mode in its
+    // OWN config block BEFORE the mirror is set up. Combining pin + mirror
+    // in one config block conflicts (the mirror call resets target mode and
+    // rejects the whole config). Doing it first ensures the panel is in a
+    // stable fixed scanout when the mirror call attaches it to the source.
+    if (refreshRate > 0) {
+        CGDisplayModeRef pinMode = CopyBestModeAtRate(targetDisplayID, refreshRate);
+        if (pinMode) {
+            CGDisplayConfigRef pinConfig;
+            if (CGBeginDisplayConfiguration(&pinConfig) == kCGErrorSuccess) {
+                NSLog(@"VDM: Pinning target to %zux%zu @ %.1f Hz",
+                      CGDisplayModeGetWidth(pinMode),
+                      CGDisplayModeGetHeight(pinMode),
+                      CGDisplayModeGetRefreshRate(pinMode));
+                CGError pinErr = CGConfigureDisplayWithDisplayMode(pinConfig, targetDisplayID, pinMode, NULL);
+                if (pinErr == kCGErrorSuccess) {
+                    pinErr = CGCompleteDisplayConfiguration(pinConfig, kCGConfigureForSession);
+                    if (pinErr != kCGErrorSuccess) {
+                        NSLog(@"VDM: WARN - Pin complete failed: %d", pinErr);
+                    }
+                } else {
+                    NSLog(@"VDM: WARN - Pin configure failed: %d", pinErr);
+                    CGCancelDisplayConfiguration(pinConfig);
+                }
+            }
+            CGDisplayModeRelease(pinMode);
+        } else {
+            NSLog(@"VDM: WARN - No %.1f Hz mode found on target %u",
+                  refreshRate, targetDisplayID);
+        }
+    }
+
+    // Step 2 — configure the mirror in its own config block.
     CGDisplayConfigRef configRef;
     CGError err = CGBeginDisplayConfiguration(&configRef);
     if (err != kCGErrorSuccess) {
@@ -335,7 +398,20 @@ static void retainWindowIfNeeded(NSWindow *window) {
         return NO;
     }
 
-    NSLog(@"VDM: Mirror success");
+    // Verify what the panel ended up at — this is the ground truth for
+    // whether the pin survived. Log so we can confirm without needing to
+    // perceive the difference visually.
+    CGDisplayModeRef actual = CGDisplayCopyDisplayMode(targetDisplayID);
+    if (actual) {
+        NSLog(@"VDM: Mirror success — target %u now at %zux%zu @ %.1f Hz",
+              targetDisplayID,
+              CGDisplayModeGetWidth(actual),
+              CGDisplayModeGetHeight(actual),
+              CGDisplayModeGetRefreshRate(actual));
+        CGDisplayModeRelease(actual);
+    } else {
+        NSLog(@"VDM: Mirror success (could not read back target mode)");
+    }
     return YES;
 }
 
@@ -645,6 +721,47 @@ static void retainWindowIfNeeded(NSWindow *window) {
                                      redPrimary:red
                                    greenPrimary:green
                                     bluePrimary:blue];
+}
+
+#pragma mark - HDR control (Beta)
+
+// SkyLight exposes per-display HDR control that stays in sync with the
+// System Settings ▸ Displays "High Dynamic Range" checkbox. SkyLight is a
+// private framework, so we resolve the symbols at runtime rather than link it.
+typedef bool (*SLHDRQueryFn)(CGDirectDisplayID);
+typedef int  (*SLHDRSetFn)(CGDirectDisplayID, bool);
+
+static void *VDMSkyLightHandle(void) {
+    static void *handle = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+        if (!handle) {
+            NSLog(@"VDM: WARNING - could not dlopen SkyLight for HDR control");
+        }
+    });
+    return handle;
+}
+
+- (BOOL)displaySupportsHDR:(CGDirectDisplayID)displayID {
+    SLHDRQueryFn fn = (SLHDRQueryFn)dlsym(VDMSkyLightHandle(), "SLSDisplaySupportsHDRMode");
+    return fn ? (fn(displayID) ? YES : NO) : NO;
+}
+
+- (BOOL)isHDREnabledForDisplay:(CGDirectDisplayID)displayID {
+    SLHDRQueryFn fn = (SLHDRQueryFn)dlsym(VDMSkyLightHandle(), "SLSDisplayIsHDRModeEnabled");
+    return fn ? (fn(displayID) ? YES : NO) : NO;
+}
+
+- (BOOL)setHDREnabled:(BOOL)enabled forDisplay:(CGDirectDisplayID)displayID {
+    SLHDRSetFn fn = (SLHDRSetFn)dlsym(VDMSkyLightHandle(), "SLSDisplaySetHDRModeEnabled");
+    if (!fn) {
+        NSLog(@"VDM: ERROR - SLSDisplaySetHDRModeEnabled unavailable");
+        return NO;
+    }
+    int rc = fn(displayID, enabled ? true : false);
+    NSLog(@"VDM: setHDREnabled(%d) for display %u -> rc=%d", enabled, displayID, rc);
+    return rc == 0;
 }
 
 @end

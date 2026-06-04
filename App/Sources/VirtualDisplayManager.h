@@ -42,6 +42,19 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
             toDisplay:(CGDirectDisplayID)targetDisplayID;
 
+/// Mirror a virtual display to a physical display, pinning the physical target
+/// to a native-resolution mode at the requested refresh rate. This prevents
+/// macOS from leaving the physical panel in a variable-refresh (Adaptive Sync)
+/// scanout mode, which causes hardware-cursor glitches and effective refresh
+/// rate downgrades when mirroring from a virtual source.
+/// @param sourceDisplayID The virtual display ID (mirror source)
+/// @param targetDisplayID The physical display ID (mirror target)
+/// @param refreshRate Refresh rate in Hz to pin the physical target to
+/// @return YES if successful
+- (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
+            toDisplay:(CGDirectDisplayID)targetDisplayID
+               atRate:(double)refreshRate;
+
 /// Stop mirroring for a display
 /// @param displayID The display to stop mirroring
 /// @return YES if successful
@@ -87,6 +100,21 @@ NS_ASSUME_NONNULL_BEGIN
                                               name:(NSString *)name
                                        refreshRate:(double)refreshRate
                               matchingDisplay:(CGDirectDisplayID)targetDisplayID;
+
+#pragma mark - HDR control (Beta)
+
+/// Whether a physical display advertises HDR capability.
+/// Apply HDR to the PHYSICAL mirror target, not the virtual display — the
+/// virtual display reports no HDR support.
+- (BOOL)displaySupportsHDR:(CGDirectDisplayID)displayID;
+
+/// Whether HDR mode is currently enabled on a physical display.
+- (BOOL)isHDREnabledForDisplay:(CGDirectDisplayID)displayID;
+
+/// Enable or disable HDR mode on a physical display via the SkyLight path,
+/// which keeps the System Settings "High Dynamic Range" checkbox in sync.
+/// Returns YES on success.
+- (BOOL)setHDREnabled:(BOOL)enabled forDisplay:(CGDirectDisplayID)displayID;
 
 @end
 

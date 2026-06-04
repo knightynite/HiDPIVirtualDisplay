@@ -658,6 +658,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kAutoRestoreKey = "autoRestoreOnCrash"
     private let kAutoApplyOnConnectKey = "autoApplyOnConnect"
     private let kRefreshRateKey = "customRefreshRate"  // 0.0 = auto-detect
+    private let kKeepHDREnabledKey = "keepHDREnabledBeta"  // Beta: keep HDR on the mirror target
     private let kBoundMonitorVendorKey = "boundMonitorVendor"
     private let kBoundMonitorModelKey = "boundMonitorModel"
 
@@ -1424,6 +1425,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
         settingsMenu.addItem(autoUpdateItem)
 
+        // Hidden beta toggle — revealed only when the menu is opened with Option held
+        // (it replaces the "Check for Updates Automatically" row). Keeps HDR enabled on
+        // the physical mirror target across logins/reconnects, which macOS otherwise resets.
+        let hdrBetaItem = NSMenuItem(title: "Keep HDR On (Beta)", action: #selector(toggleHDRBeta(_:)), keyEquivalent: "")
+        hdrBetaItem.target = self
+        hdrBetaItem.isAlternate = true
+        hdrBetaItem.keyEquivalentModifierMask = [.option]
+        hdrBetaItem.state = UserDefaults.standard.bool(forKey: kKeepHDREnabledKey) ? .on : .off
+        settingsMenu.addItem(hdrBetaItem)
+
         settingsMenu.addItem(NSMenuItem.separator())
 
         // Refresh rate submenu
@@ -1510,10 +1521,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc func toggleHDRBeta(_ sender: NSMenuItem) {
+        let newValue = !UserDefaults.standard.bool(forKey: kKeepHDREnabledKey)
+        UserDefaults.standard.set(newValue, forKey: kKeepHDREnabledKey)
+        debugLog("Keep HDR on (beta): \(newValue)")
+        applyHDRPreference()
+        rebuildMenu()
+    }
+
+    /// Apply the "Keep HDR On (Beta)" preference to the current physical mirror
+    /// target. Enabling HDR re-applies the panel state macOS otherwise resets on
+    /// login; disabling turns it back off. No-op when no mirror target is active
+    /// or the target doesn't advertise HDR.
+    func applyHDRPreference() {
+        let target = targetExternalDisplayID
+        guard target != 0 else {
+            debugLog("HDR: no active mirror target, skipping")
+            return
+        }
+        let manager = VirtualDisplayManager.shared()
+        let want = UserDefaults.standard.bool(forKey: kKeepHDREnabledKey)
+        guard manager.displaySupportsHDR(target) else {
+            debugLog("HDR: display \(target) does not support HDR, skipping")
+            return
+        }
+        if manager.isHDREnabled(forDisplay: target) == want {
+            debugLog("HDR: display \(target) already \(want ? "on" : "off")")
+            return
+        }
+        let ok = manager.setHDREnabled(want, forDisplay: target)
+        debugLog("HDR: setHDREnabled(\(want)) for \(target) -> \(ok)")
+    }
+
     @objc func setRefreshRate(_ sender: NSMenuItem) {
         guard let rate = sender.representedObject as? NSNumber else { return }
+        let oldRate = UserDefaults.standard.double(forKey: kRefreshRateKey)
         UserDefaults.standard.set(rate.doubleValue, forKey: kRefreshRateKey)
         debugLog("Refresh rate set to: \(rate.doubleValue == 0 ? "Auto" : "\(rate.doubleValue) Hz")")
+
+        // CGVirtualDisplay objects persist until the process exits, so changing
+        // the rate on a live display has no effect — we must relaunch. The saved
+        // preset is already in kLastPresetKey from when it was applied, so
+        // checkAndRestoreFromCrash() will re-apply it with the new rate.
+        if (isActive || hasOrphanedVirtualDisplay()) && oldRate != rate.doubleValue {
+            debugLog("Active display present, relaunching to apply new refresh rate...")
+            isRestarting = true
+            StatusWindowController.shared.show(message: "Applying refresh rate...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                relaunchApp()
+            }
+            return
+        }
         rebuildMenu()
     }
 
@@ -1673,22 +1731,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("HiDPI disabled (preset cleared)")
     }
 
-    /// Get the refresh rate for the virtual display.
-    /// Checks user's custom setting first, then auto-detects from physical monitor.
-    func getDisplayRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
-        let customRate = UserDefaults.standard.double(forKey: kRefreshRateKey)
-        if customRate > 0 {
-            debugLog("Using custom refresh rate: \(customRate) Hz")
-            return customRate
-        }
-
-        guard let mode = CGDisplayCopyDisplayMode(displayID) else {
-            debugLog("Could not get display mode for \(displayID), defaulting to 60 Hz")
+    /// Find the highest refresh rate the panel supports across any of its modes.
+    /// More reliable than CGDisplayCopyDisplayMode for "Auto" because the
+    /// current mode can briefly report a transient low rate during the
+    /// teardown/recreate window after a relaunch.
+    func maxSupportedRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
+        let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else {
             return 60.0
         }
-        let rate = mode.refreshRate
-        debugLog("Display \(displayID) reports refresh rate: \(rate) Hz")
-        return rate > 0 ? rate : 60.0
+        let rates = modes.compactMap { $0.refreshRate > 0 ? $0.refreshRate : nil }
+        return rates.max() ?? 60.0
+    }
+
+    /// Get the refresh rate for the virtual display.
+    /// Auto = panel's max supported rate. Custom rates are clamped to that max
+    /// so picking 240Hz on a 120Hz-max panel uses 120Hz instead of silently
+    /// failing.
+    func getDisplayRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
+        let maxRate = maxSupportedRefreshRate(displayID)
+        let customRate = UserDefaults.standard.double(forKey: kRefreshRateKey)
+        if customRate > 0 {
+            if customRate > maxRate + 0.5 {
+                debugLog("Requested \(customRate) Hz exceeds panel max (\(maxRate) Hz), clamping to \(maxRate) Hz")
+                return maxRate
+            }
+            debugLog("Using custom refresh rate: \(customRate) Hz (panel max \(maxRate) Hz)")
+            return customRate
+        }
+        debugLog("Auto: using panel max refresh rate \(maxRate) Hz")
+        return maxRate
     }
 
     func createVirtualDisplayAsync(config: PresetConfig) {
@@ -1757,7 +1829,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func performMirror(virtualID: CGDirectDisplayID, externalID: CGDirectDisplayID, config: PresetConfig) {
         debugLog("Setting up mirror: \(virtualID) -> \(externalID)")
         let manager = VirtualDisplayManager.shared()
-        let success = manager.mirrorDisplay(virtualID, toDisplay: externalID)
+        // Pin the physical target to the same rate the virtual was created at,
+        // so the panel scans out at the requested rate instead of being left in
+        // VRR mode (which can downgrade effective rate and break the cursor).
+        let pinRate = getDisplayRefreshRate(externalID)
+        let success = manager.mirrorDisplay(virtualID, toDisplay: externalID, atRate: pinRate)
         debugLog("Mirror result: \(success)")
 
         // Setup is complete (whether successful or not)
@@ -1776,6 +1852,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if config.hiDPI {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     self?.verifyBackingScale(externalID: externalID, config: config)
+                }
+            }
+
+            // Beta: re-apply the HDR preference once the mirror has settled. macOS
+            // resets HDR on login, so this restores it for users who keep it on.
+            // Delayed so it runs after the mirror is fully established.
+            if UserDefaults.standard.bool(forKey: kKeepHDREnabledKey) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.applyHDRPreference()
                 }
             }
         } else {
