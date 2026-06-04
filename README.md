@@ -49,6 +49,10 @@ Click the display icon in your menu bar, pick your monitor, pick a resolution pr
 
 Every monitor submenu has a **Custom Scale...** option — it opens a slider for any factor between 1.1x and 2.0x. The resolution preview updates as you drag.
 
+### HDR (beta)
+
+If your monitor supports HDR, G9 Helper can keep it enabled across logins and reconnects, which macOS otherwise resets on every login. Hold Option, open the menu, go to **Settings**, and turn on **Keep HDR On (Beta)**. It is off by default and stays hidden unless you hold Option. Note that HDR makes the SDR desktop look dimmer and warmer, so it suits HDR video and games more than plain desktop and text work.
+
 ## Resolution Presets
 
 ### Samsung G9 57" (7680x2160)
@@ -101,7 +105,7 @@ cd /path/to/HiDPIVirtualDisplay/App
 ## Known issues & limitations
 
 - Uses private macOS APIs — could break with future macOS updates
-- HDR doesn't work in mirrored mode
+- HDR is beta. It can be kept on across logins from Settings (hold Option), but it dims and warms the SDR desktop, which is normal HDR behavior on this panel
 - Sometimes needs re-enabling after sleep/wake
 - Switching presets or disabling HiDPI briefly restarts the app (virtual displays can only be fully torn down when the process exits)
 - Refresh rate is auto-detected; if your monitor flickers, set it manually under Settings > Refresh Rate
