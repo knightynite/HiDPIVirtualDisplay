@@ -685,6 +685,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("App launched")
 
+        // Log which slice of the universal binary is running, plus version.
+        // Helps diagnose Intel reports (the app ships arm64 + x86_64).
+        #if arch(arm64)
+        let runningArch = "arm64"
+        #elseif arch(x86_64)
+        let runningArch = "x86_64"
+        #else
+        let runningArch = "unknown"
+        #endif
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        debugLog("Version \(appVersion), architecture: \(runningArch)")
+
         // Hide dock icon
         NSApp.setActivationPolicy(.accessory)
 

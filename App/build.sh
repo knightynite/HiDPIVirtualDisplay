@@ -22,27 +22,45 @@ echo "Building ${APP_NAME}..."
 mkdir -p "${MACOS}"
 mkdir -p "${RESOURCES}"
 
-# Compile Objective-C file WITHOUT ARC
-echo "Compiling Objective-C (no ARC)..."
-clang -c -fno-objc-arc -fobjc-arc-exceptions \
-    -framework Foundation \
-    -framework CoreGraphics \
-    ${OBJC_SOURCES} \
-    -o "${BUILD_DIR}/VirtualDisplayManager.o"
+# Build a universal binary (arm64 + x86_64) so the app runs on both Apple
+# Silicon and Intel Macs. Each arch is compiled and linked separately, then
+# combined with lipo. Deployment target matches LSMinimumSystemVersion (12.0).
+ARCHS="arm64 x86_64"
+DEPLOY_TARGET="12.0"
+SLICES=""
 
-# Compile Swift and link with pre-compiled Objective-C
-echo "Compiling Swift and linking..."
-swiftc \
-    -parse-as-library \
-    ${SWIFT_SOURCES} \
-    "${BUILD_DIR}/VirtualDisplayManager.o" \
-    -import-objc-header ${BRIDGING_HEADER} \
-    -framework Foundation \
-    -framework AppKit \
-    -framework CoreGraphics \
-    -framework IOKit \
-    -framework SwiftUI \
-    -o "${MACOS}/${BUNDLE_NAME}"
+for ARCH in ${ARCHS}; do
+    TARGET="${ARCH}-apple-macosx${DEPLOY_TARGET}"
+
+    echo "Compiling Objective-C (no ARC) for ${ARCH}..."
+    clang -c -fno-objc-arc -fobjc-arc-exceptions \
+        -target ${TARGET} \
+        -framework Foundation \
+        -framework CoreGraphics \
+        ${OBJC_SOURCES} \
+        -o "${BUILD_DIR}/VirtualDisplayManager-${ARCH}.o"
+
+    echo "Compiling Swift and linking for ${ARCH}..."
+    swiftc \
+        -target ${TARGET} \
+        -parse-as-library \
+        ${SWIFT_SOURCES} \
+        "${BUILD_DIR}/VirtualDisplayManager-${ARCH}.o" \
+        -import-objc-header ${BRIDGING_HEADER} \
+        -framework Foundation \
+        -framework AppKit \
+        -framework CoreGraphics \
+        -framework IOKit \
+        -framework SwiftUI \
+        -o "${BUILD_DIR}/${BUNDLE_NAME}-${ARCH}"
+
+    SLICES="${SLICES} ${BUILD_DIR}/${BUNDLE_NAME}-${ARCH}"
+done
+
+# Combine the per-arch executables into one universal binary
+echo "Creating universal binary..."
+lipo -create ${SLICES} -o "${MACOS}/${BUNDLE_NAME}"
+lipo -info "${MACOS}/${BUNDLE_NAME}"
 
 # Copy Info.plist
 cp Info.plist "${CONTENTS}/"

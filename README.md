@@ -28,7 +28,7 @@ brew install knightynite/g9-helper/g9-helper
 
 ### Manual
 
-Grab [`G9.Helper-v1.2.0.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.0/G9.Helper-v1.2.0.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
+Grab [`G9.Helper-v1.2.1.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.1/G9.Helper-v1.2.1.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
 macOS will probably block it on first launch — right-click the app, hit "Open", confirm in the dialog.
 
@@ -97,10 +97,11 @@ cd /path/to/HiDPIVirtualDisplay/App
 ## Requirements
 
 - macOS 12+ (Monterey or later)
-- Apple Silicon recommended
+- Universal binary, runs on both Apple Silicon and Intel Macs
+- Apple Silicon horizontal limits:
   - Base chips (M1/M2/M3/M4): up to 6144px horizontal
   - Pro/Max/Ultra: 7680px+ horizontal
-- Intel Macs may work but not well tested
+- Intel support is new in 1.2.1; if you hit a problem, please open an issue
 
 ## Known issues & limitations
 
