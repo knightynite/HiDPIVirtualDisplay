@@ -659,6 +659,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kAutoApplyOnConnectKey = "autoApplyOnConnect"
     private let kRefreshRateKey = "customRefreshRate"  // 0.0 = auto-detect
     private let kKeepHDREnabledKey = "keepHDREnabledBeta"  // Beta: keep HDR on the mirror target
+    private let kKeepPrimaryDisplayKey = "keepExternalAsMainDisplay"  // Keep the external monitor as the main display (menu bar)
     private let kBoundMonitorVendorKey = "boundMonitorVendor"
     private let kBoundMonitorModelKey = "boundMonitorModel"
 
@@ -1432,6 +1433,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         autoRestoreItem.state = UserDefaults.standard.bool(forKey: kAutoRestoreKey) ? .on : .off
         settingsMenu.addItem(autoRestoreItem)
 
+        // Keep the external monitor as the main display (menu bar). macOS moves
+        // the menu bar back to the built-in screen after sleep/wake; this
+        // re-asserts the external monitor as primary whenever the mirror is set up.
+        let keepPrimaryItem = NSMenuItem(title: "Keep External as Main Display", action: #selector(toggleKeepPrimary(_:)), keyEquivalent: "")
+        keepPrimaryItem.target = self
+        keepPrimaryItem.state = UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey) ? .on : .off
+        settingsMenu.addItem(keepPrimaryItem)
+
         let autoUpdateItem = NSMenuItem(title: "Check for Updates Automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
         autoUpdateItem.target = self
         autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
@@ -1541,6 +1550,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc func toggleKeepPrimary(_ sender: NSMenuItem) {
+        let newValue = !UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey)
+        UserDefaults.standard.set(newValue, forKey: kKeepPrimaryDisplayKey)
+        debugLog("Keep external as main display: \(newValue)")
+        // Apply immediately so enabling it moves the menu bar without waiting
+        // for the next mirror setup or wake.
+        if newValue {
+            applyPrimaryDisplayPreference()
+        }
+        rebuildMenu()
+    }
+
     /// Apply the "Keep HDR On (Beta)" preference to the current physical mirror
     /// target. Enabling HDR re-applies the panel state macOS otherwise resets on
     /// login; disabling turns it back off. No-op when no mirror target is active
@@ -1563,6 +1584,70 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let ok = manager.setHDREnabled(want, forDisplay: target)
         debugLog("HDR: setHDREnabled(\(want)) for \(target) -> \(ok)")
+    }
+
+    /// Make the given display the main display (the one that owns the menu bar).
+    /// macOS designates whichever display sits at global origin (0,0) as the main
+    /// display, so we translate the whole arrangement by the target's current
+    /// origin — keeping every display's relative position while landing the target
+    /// at (0,0). Returns true if the target is (or becomes) the main display.
+    func setMainDisplay(_ targetID: CGDirectDisplayID) -> Bool {
+        guard targetID != 0 else { return false }
+
+        if CGMainDisplayID() == targetID {
+            debugLog("Primary: display \(targetID) is already the main display")
+            return true
+        }
+
+        let targetOrigin = CGDisplayBounds(targetID).origin
+        if targetOrigin == .zero {
+            debugLog("Primary: display \(targetID) already at origin (0,0)")
+            return true
+        }
+
+        var configRef: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&configRef) == .success, let config = configRef else {
+            debugLog("Primary: begin display configuration failed")
+            return false
+        }
+
+        var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
+        var displayCount: UInt32 = 0
+        CGGetOnlineDisplayList(32, &displayList, &displayCount)
+
+        for i in 0..<Int(displayCount) {
+            let id = displayList[i]
+            let bounds = CGDisplayBounds(id)
+            let newX = Int32(bounds.origin.x - targetOrigin.x)
+            let newY = Int32(bounds.origin.y - targetOrigin.y)
+            CGConfigureDisplayOrigin(config, id, newX, newY)
+        }
+
+        // Session-scoped (not permanent) to avoid the ColorSync profile
+        // persistence I/O that can stall the daemon — we re-assert on every
+        // mirror setup and wake anyway.
+        let result = CGCompleteDisplayConfiguration(config, .forSession)
+        let ok = result == .success
+        debugLog("Primary: set display \(targetID) as main -> \(ok ? "ok" : "failed (\(result.rawValue))")")
+        return ok
+    }
+
+    /// Apply the "Keep External as Main Display" preference. macOS resets the
+    /// main display back to the built-in screen after sleep/wake, so we re-assert
+    /// the external monitor as primary once the mirror is established. The mirror
+    /// set's master is the virtual display (the physical monitor mirrors it), so
+    /// that's what we promote to origin (0,0). No-op when disabled or inactive.
+    func applyPrimaryDisplayPreference() {
+        guard UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey) else { return }
+
+        // Prefer the virtual display (the mirror master that owns the desktop);
+        // fall back to the physical target if we somehow don't have it.
+        let anchor = currentVirtualID != 0 ? currentVirtualID : targetExternalDisplayID
+        guard anchor != 0 else {
+            debugLog("Primary: no active display to promote, skipping")
+            return
+        }
+        _ = setMainDisplay(anchor)
     }
 
     @objc func setRefreshRate(_ sender: NSMenuItem) {
@@ -1873,6 +1958,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if UserDefaults.standard.bool(forKey: kKeepHDREnabledKey) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                     self?.applyHDRPreference()
+                }
+            }
+
+            // Re-assert the external monitor as the main display. macOS resets the
+            // menu bar to the built-in screen on sleep/wake; this restores it once
+            // the mirror is established (covers both first apply and wake restore).
+            // Slightly later than HDR so it runs after any HDR mode transition.
+            if UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    self?.applyPrimaryDisplayPreference()
                 }
             }
         } else {
