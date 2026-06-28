@@ -28,7 +28,7 @@ brew install knightynite/g9-helper/g9-helper
 
 ### Manual
 
-Grab [`G9.Helper-v1.2.1.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.1/G9.Helper-v1.2.1.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
+Grab [`G9.Helper-v1.2.2.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.2/G9.Helper-v1.2.2.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
 macOS will probably block it on first launch — right-click the app, hit "Open", confirm in the dialog.
 
@@ -52,6 +52,10 @@ Every monitor submenu has a **Custom Scale...** option — it opens a slider for
 ### HDR (beta)
 
 If your monitor supports HDR, G9 Helper can keep it enabled across logins and reconnects, which macOS otherwise resets on every login. Hold Option, open the menu, go to **Settings**, and turn on **Keep HDR On (Beta)**. It is off by default and stays hidden unless you hold Option. Note that HDR makes the SDR desktop look dimmer and warmer, so it suits HDR video and games more than plain desktop and text work.
+
+## Keep external as main display
+
+If you make your external monitor the primary display (the one with the menu bar), macOS moves it back to the built-in screen after every sleep/wake. Open the menu, go to **Settings**, and turn on **Keep External as Main Display**. G9 Helper then re-asserts your external monitor as the main display whenever it sets up the mirror, including after waking from sleep. It is off by default.
 
 ## Resolution Presets
 
