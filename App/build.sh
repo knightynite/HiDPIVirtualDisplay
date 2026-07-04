@@ -71,9 +71,11 @@ if [ -f "Resources/AppIcon.icns" ]; then
     echo "App icon copied"
 fi
 
-# Sign the app with entitlements
+# Sign the app with entitlements. Signing failures must fail the build —
+# an unsigned/mis-signed artifact used to slip through via `|| true`.
 echo "Signing..."
-codesign --force --sign - --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}" || true
+codesign --force --sign - --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}"
+codesign --verify --strict --verbose=2 "${APP_BUNDLE}"
 
 echo "Build complete: ${APP_BUNDLE}"
 echo ""

@@ -155,23 +155,30 @@ static void retainWindowIfNeeded(NSWindow *window) {
           redPrimary.x, redPrimary.y, greenPrimary.x, greenPrimary.y,
           bluePrimary.x, bluePrimary.y, whitePoint.x, whitePoint.y);
 
+    // Clear any leftovers from a previous create so overwriting the ivars
+    // below can't leak partially-created objects.
+    [self releaseDisplayObjects];
+
     @try {
-        // Create settings and retain
+        // alloc/init already returns an owned (+1) reference; the extra
+        // retains this code used to add meant releaseDisplayObjects never
+        // dropped the refcount to zero, so the CGVirtualDisplay never
+        // deallocated and the virtual display survived every in-process
+        // "destroy" (the phantom-display source).
         CGVirtualDisplaySettings *settings = [[CGVirtualDisplaySettings alloc] init];
-        [settings retain];
         settings.hiDPI = hiDPI ? 1 : 0;
         _settings = settings;
 
-        // Create descriptor and retain
         CGVirtualDisplayDescriptor *descriptor = [[CGVirtualDisplayDescriptor alloc] init];
-        [descriptor retain];
         // Use a dedicated serial queue instead of the main queue.
         // Main queue contention between virtual display callbacks and UI/timer
         // work contributed to the WindowServer deadlock.
-        descriptor.queue = dispatch_queue_create("com.hidpi.virtualdisplay.events",
-                                                  DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_t eventQueue = dispatch_queue_create("com.hidpi.virtualdisplay.events",
+                                                            DISPATCH_QUEUE_SERIAL);
+        descriptor.queue = eventQueue;  // property retains it
+        dispatch_release(eventQueue);
 
-        _displayName = [[name copy] retain];
+        _displayName = [name copy];
         descriptor.name = _displayName;
 
         // Set color primaries — when these match the physical display's EDID,
@@ -207,9 +214,9 @@ static void retainWindowIfNeeded(NSWindow *window) {
                                                                      refreshRate:refreshRate];
         if (!mode) {
             NSLog(@"VDM: ERROR - Failed to create mode");
+            [self releaseDisplayObjects];
             return kCGNullDirectDisplay;
         }
-        [mode retain];
         _mode = mode;
 
         // Single-mode array — adding a 60 Hz fallback caused macOS to silently
@@ -226,9 +233,9 @@ static void retainWindowIfNeeded(NSWindow *window) {
         CGVirtualDisplay *display = [[CGVirtualDisplay alloc] initWithDescriptor:_descriptor];
         if (!display) {
             NSLog(@"VDM: ERROR - Failed to create display");
+            [self releaseDisplayObjects];
             return kCGNullDirectDisplay;
         }
-        [display retain];
         _display = display;
         NSLog(@"VDM: Display created: %p", _display);
 
@@ -236,6 +243,7 @@ static void retainWindowIfNeeded(NSWindow *window) {
         BOOL applied = [_display applySettings:_settings];
         if (!applied) {
             NSLog(@"VDM: ERROR - Failed to apply settings");
+            [self releaseDisplayObjects];
             return kCGNullDirectDisplay;
         }
         NSLog(@"VDM: Settings applied");
@@ -246,6 +254,7 @@ static void retainWindowIfNeeded(NSWindow *window) {
 
         if (displayID == 0 || displayID == kCGNullDirectDisplay) {
             NSLog(@"VDM: ERROR - Invalid display ID");
+            [self releaseDisplayObjects];
             return kCGNullDirectDisplay;
         }
 
@@ -254,6 +263,7 @@ static void retainWindowIfNeeded(NSWindow *window) {
 
     } @catch (NSException *exception) {
         NSLog(@"VDM: EXCEPTION: %@", exception);
+        [self releaseDisplayObjects];
         return kCGNullDirectDisplay;
     }
 }
@@ -336,12 +346,39 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     return retained;
 }
 
+/// Put the target display back into `mode` after a failed mirror attempt so
+/// the panel isn't stranded in the pinned mode the user never asked for.
+/// Best-effort; no-op when mode is NULL or unchanged.
+static void VDMRestorePinnedMode(CGDirectDisplayID displayID, CGDisplayModeRef mode) {
+    if (!mode) return;
+    CGDisplayModeRef current = CGDisplayCopyDisplayMode(displayID);
+    BOOL unchanged = current &&
+        CGDisplayModeGetWidth(current) == CGDisplayModeGetWidth(mode) &&
+        CGDisplayModeGetHeight(current) == CGDisplayModeGetHeight(mode) &&
+        fabs(CGDisplayModeGetRefreshRate(current) - CGDisplayModeGetRefreshRate(mode)) < 0.5;
+    if (current) CGDisplayModeRelease(current);
+    if (unchanged) return;
+
+    CGDisplayConfigRef config;
+    if (CGBeginDisplayConfiguration(&config) != kCGErrorSuccess) return;
+    if (CGConfigureDisplayWithDisplayMode(config, displayID, mode, NULL) != kCGErrorSuccess) {
+        CGCancelDisplayConfiguration(config);
+        return;
+    }
+    CGError err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+    NSLog(@"VDM: Restored target %u to original mode after failed mirror (err=%d)", displayID, err);
+}
+
 - (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
             toDisplay:(CGDirectDisplayID)targetDisplayID
                atRate:(double)refreshRate {
 
     NSLog(@"VDM: Mirror %u -> %u (pin target to %.1f Hz)",
           sourceDisplayID, targetDisplayID, refreshRate);
+
+    // Remember the target's mode so a failed mirror doesn't strand the
+    // panel in the pinned mode with no HiDPI to show for it.
+    CGDisplayModeRef originalMode = CGDisplayCopyDisplayMode(targetDisplayID);
 
     // Step 1 — pin the physical target to a fixed-rate native mode in its
     // OWN config block BEFORE the mirror is set up. Combining pin + mirror
@@ -380,6 +417,8 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     CGError err = CGBeginDisplayConfiguration(&configRef);
     if (err != kCGErrorSuccess) {
         NSLog(@"VDM: ERROR - Begin config failed: %d", err);
+        VDMRestorePinnedMode(targetDisplayID, originalMode);
+        if (originalMode) CGDisplayModeRelease(originalMode);
         return NO;
     }
 
@@ -387,6 +426,8 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     if (err != kCGErrorSuccess) {
         NSLog(@"VDM: ERROR - Configure mirror failed: %d", err);
         CGCancelDisplayConfiguration(configRef);
+        VDMRestorePinnedMode(targetDisplayID, originalMode);
+        if (originalMode) CGDisplayModeRelease(originalMode);
         return NO;
     }
 
@@ -395,8 +436,11 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     err = CGCompleteDisplayConfiguration(configRef, kCGConfigureForSession);
     if (err != kCGErrorSuccess) {
         NSLog(@"VDM: ERROR - Complete config failed: %d", err);
+        VDMRestorePinnedMode(targetDisplayID, originalMode);
+        if (originalMode) CGDisplayModeRelease(originalMode);
         return NO;
     }
+    if (originalMode) CGDisplayModeRelease(originalMode);
 
     // Verify what the panel ended up at — this is the ground truth for
     // whether the pin survived. Log so we can confirm without needing to
@@ -497,9 +541,16 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     for (uint32_t i = 0; i < displayCount; i++) {
         CGDirectDisplayID displayID = displayList[i];
         CGDirectDisplayID mirrorOf = CGDisplayMirrorsDisplay(displayID);
-        if (mirrorOf != kCGNullDirectDisplay) {
-            [self stopMirroringForDisplay:displayID];
+        if (mirrorOf == kCGNullDirectDisplay) continue;
+        // Only break mirror sets that involve one of OUR virtual displays
+        // (vendor 0x1234). Mirroring the user configured between two of
+        // their own displays is none of our business.
+        if (CGDisplayVendorNumber(mirrorOf) != 0x1234 &&
+            CGDisplayVendorNumber(displayID) != 0x1234) {
+            NSLog(@"VDM: Leaving unrelated mirror set alone (%u mirrors %u)", displayID, mirrorOf);
+            continue;
         }
+        [self stopMirroringForDisplay:displayID];
     }
     NSLog(@"VDM: Reset mirroring complete");
 }
