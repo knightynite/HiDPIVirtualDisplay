@@ -28,7 +28,7 @@ brew install knightynite/g9-helper/g9-helper
 
 ### Manual
 
-Grab [`G9.Helper-v1.2.2.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.2/G9.Helper-v1.2.2.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
+Grab [`G9.Helper-v1.2.3.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.3/G9.Helper-v1.2.3.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
 macOS will probably block it on first launch — right-click the app, hit "Open", confirm in the dialog.
 
@@ -111,7 +111,7 @@ cd /path/to/HiDPIVirtualDisplay/App
 
 - Uses private macOS APIs — could break with future macOS updates
 - HDR is beta. It can be kept on across logins from Settings (hold Option), but it dims and warms the SDR desktop, which is normal HDR behavior on this panel
-- Sometimes needs re-enabling after sleep/wake
+- Since 1.2.3, sleep/wake and brief monitor dropouts keep the existing setup (and your window layout) instead of rebuilding it; if HiDPI ever fails to come back, re-apply the preset from the menu
 - Switching presets or disabling HiDPI briefly restarts the app (virtual displays can only be fully torn down when the process exits)
 - Refresh rate is auto-detected; if your monitor flickers, set it manually under Settings > Refresh Rate
 
