@@ -672,6 +672,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kKeepPrimaryDisplayKey = "keepExternalAsMainDisplay"  // Keep the external monitor as the main display (menu bar)
     private let kBoundMonitorVendorKey = "boundMonitorVendor"
     private let kBoundMonitorModelKey = "boundMonitorModel"
+    private let kBoundMonitorSerialKey = "boundMonitorSerial"
 
     // Track if we're waiting for monitor reconnection
     private var wasDisconnected = false
@@ -703,6 +704,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var displayObserver: Any?
     private var displayCheckTimer: Timer?
     private var wakeObserver: Any?
+    private var screenSleepObserver: Any?
+    private var screenWakeObserver: Any?
+
+    // Screens are asleep (display sleep, not system sleep). The G9 drops off
+    // the display list for the whole time the panel is dark, which is not a
+    // disconnect. While this is set, disconnect handling is deferred; the
+    // wake/display-change handlers repair the mirror when the screens return.
+    private var screensAsleep = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single-instance guard: launchd RunAtLoad plus a manual open (or a
@@ -819,7 +828,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleWakeFromSleep()
         }
 
-        debugLog("Display change monitoring started (notification + timer + wake)")
+        // Track display sleep so a dark panel isn't treated as an unplug
+        screenSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            debugLog(">>> Screens did sleep — deferring disconnect handling")
+            self?.screensAsleep = true
+        }
+
+        screenWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            debugLog(">>> Screens did wake")
+            self?.screensAsleep = false
+            // The panel takes a few seconds to re-enumerate; the display-change
+            // notification then repairs the mirror if it broke. The periodic
+            // check is the backstop if no notification arrives.
+        }
+
+        debugLog("Display change monitoring started (notification + timer + wake + screen sleep)")
     }
 
     func stopDisplayChangeMonitoring() {
@@ -830,6 +861,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             wakeObserver = nil
+        }
+        if let observer = screenSleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            screenSleepObserver = nil
+        }
+        if let observer = screenWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            screenWakeObserver = nil
         }
         displayCheckTimer?.invalidate()
         displayCheckTimer = nil
@@ -1164,6 +1203,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// repair the mirror in place.
     func scheduleDisconnectConfirmation() {
         if disconnectConfirmationPending || isSettingUp || isRestarting { return }
+        if screensAsleep {
+            debugLog("Monitor gone but screens are asleep — not a disconnect, deferring")
+            return
+        }
         disconnectConfirmationPending = true
         debugLog("Disconnect suspected — re-checking for \(3 * 4)s before tearing down")
         confirmDisconnect(attempt: 1)
@@ -1172,7 +1215,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func confirmDisconnect(attempt: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
             guard let self = self else { return }
-            if self.isSettingUp || self.isRestarting {
+            if self.isSettingUp || self.isRestarting || self.screensAsleep {
                 self.disconnectConfirmationPending = false
                 return
             }
@@ -2275,15 +2318,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // With multiple externals, prefer the monitor the saved preset was
         // applied to — otherwise the fingerprint check can pass on one display
         // while setup mirrors a different one.
-        if UserDefaults.standard.object(forKey: kBoundMonitorVendorKey) != nil {
-            let savedVendor = UserDefaults.standard.integer(forKey: kBoundMonitorVendorKey)
-            let savedModel = UserDefaults.standard.integer(forKey: kBoundMonitorModelKey)
-            if let bound = candidates.first(where: {
-                Int(CGDisplayVendorNumber($0.id)) == savedVendor && Int(CGDisplayModelNumber($0.id)) == savedModel
-            }) {
-                debugLog("  -> Selected external display: \(bound.id) (matches saved monitor fingerprint)")
-                return bound.id
-            }
+        if let bound = candidates.first(where: { displayMatchesSavedFingerprint($0.id) }) {
+            debugLog("  -> Selected external display: \(bound.id) (matches saved monitor fingerprint)")
+            return bound.id
         }
 
         if let best = candidates.first {
@@ -2298,9 +2335,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func saveMonitorFingerprint(_ displayID: CGDirectDisplayID) {
         let vendor = Int(CGDisplayVendorNumber(displayID))
         let model = Int(CGDisplayModelNumber(displayID))
+        let serial = Int(CGDisplaySerialNumber(displayID))
         UserDefaults.standard.set(vendor, forKey: kBoundMonitorVendorKey)
         UserDefaults.standard.set(model, forKey: kBoundMonitorModelKey)
-        debugLog("Saved monitor fingerprint: vendor=\(vendor), model=\(model)")
+        UserDefaults.standard.set(serial, forKey: kBoundMonitorSerialKey)
+        debugLog("Saved monitor fingerprint: vendor=\(vendor), model=\(model), serial=\(serial)")
+    }
+
+    /// True when `displayID` is the monitor the saved preset was applied to.
+    /// Vendor must match; then model OR EDID serial. The G9 57 reports a
+    /// different product ID depending on the negotiated display mode
+    /// (observed 29814 vs 29818 on the same panel), so model alone would
+    /// wrongly block auto-restore. Serial is the stable identifier.
+    func displayMatchesSavedFingerprint(_ displayID: CGDirectDisplayID) -> Bool {
+        guard UserDefaults.standard.object(forKey: kBoundMonitorVendorKey) != nil else { return false }
+        let savedVendor = UserDefaults.standard.integer(forKey: kBoundMonitorVendorKey)
+        let savedModel = UserDefaults.standard.integer(forKey: kBoundMonitorModelKey)
+        let savedSerial = UserDefaults.standard.integer(forKey: kBoundMonitorSerialKey)
+
+        guard Int(CGDisplayVendorNumber(displayID)) == savedVendor else { return false }
+        if Int(CGDisplayModelNumber(displayID)) == savedModel { return true }
+        let serial = Int(CGDisplaySerialNumber(displayID))
+        return savedSerial != 0 && serial != 0 && serial == savedSerial
     }
 
     func connectedMonitorMatchesSavedPreset() -> Bool {
@@ -2310,6 +2366,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let savedVendor = UserDefaults.standard.integer(forKey: kBoundMonitorVendorKey)
         let savedModel = UserDefaults.standard.integer(forKey: kBoundMonitorModelKey)
+        let savedSerial = UserDefaults.standard.integer(forKey: kBoundMonitorSerialKey)
 
         // Check every connected real monitor — with multiple externals the
         // saved G9 may not be the first one CoreGraphics returns. Setup
@@ -2318,7 +2375,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var displayCount: UInt32 = 0
         CGGetOnlineDisplayList(32, &displayList, &displayCount)
 
-        var sawRealMonitor = false
+        var seen: [String] = []
         for i in 0..<Int(displayCount) {
             let displayID = displayList[i]
             let vendorID = CGDisplayVendorNumber(displayID)
@@ -2326,14 +2383,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let isVirtualDisplay = vendorID == 0x1234
             let isGhostDisplay = vendorID == 0x756E6B6E
             if isBuiltin || isVirtualDisplay || isGhostDisplay { continue }
-            sawRealMonitor = true
-            if Int(vendorID) == savedVendor && Int(CGDisplayModelNumber(displayID)) == savedModel {
+            if displayMatchesSavedFingerprint(displayID) {
                 return true
             }
+            seen.append("(\(vendorID),\(CGDisplayModelNumber(displayID)),\(CGDisplaySerialNumber(displayID)))")
         }
 
-        if sawRealMonitor {
-            debugLog("Monitor mismatch: saved=(\(savedVendor),\(savedModel)) not among connected monitors — skipping auto-apply")
+        if !seen.isEmpty {
+            debugLog("Monitor mismatch: saved=(\(savedVendor),\(savedModel),\(savedSerial)) connected=\(seen.joined(separator: " ")) — skipping auto-apply")
         }
         return false
     }
