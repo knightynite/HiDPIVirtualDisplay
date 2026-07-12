@@ -91,6 +91,8 @@ class LaunchAgentManager {
                 <string>/tmp/g9helper.log</string>
                 <key>ProcessType</key>
                 <string>Interactive</string>
+                <key>AbandonProcessGroup</key>
+                <true/>
             </dict>
             </plist>
             """

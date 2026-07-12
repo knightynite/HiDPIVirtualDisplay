@@ -32,5 +32,8 @@
 
     <key>ProcessType</key>
     <string>Interactive</string>
+
+    <key>AbandonProcessGroup</key>
+    <true/>
 </dict>
 </plist>
