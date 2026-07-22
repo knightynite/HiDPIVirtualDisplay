@@ -73,8 +73,23 @@ fi
 
 # Sign the app with entitlements. Signing failures must fail the build —
 # an unsigned/mis-signed artifact used to slip through via `|| true`.
+#
+# Prefer a real Developer ID signature with the hardened runtime and a secure
+# timestamp: that is what lets the app be notarized, so it installs by
+# double-click on other Macs instead of tripping Gatekeeper. Fall back to an
+# ad-hoc signature for local source builds that don't have the certificate.
 echo "Signing..."
-codesign --force --sign - --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}"
+SIGN_IDENTITY="${G9_SIGN_IDENTITY:-Developer ID Application: al najafi (D76ZAFG74A)}"
+if security find-identity -v -p codesigning | grep -q "${SIGN_IDENTITY}"; then
+    echo "Signing with: ${SIGN_IDENTITY}"
+    codesign --force --options runtime --timestamp \
+        --sign "${SIGN_IDENTITY}" \
+        --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}"
+else
+    echo "Developer ID identity not found — using ad-hoc signature (local build)"
+    codesign --force --sign - \
+        --entitlements HiDPIVirtualDisplay.entitlements "${APP_BUNDLE}"
+fi
 codesign --verify --strict --verbose=2 "${APP_BUNDLE}"
 
 echo "Build complete: ${APP_BUNDLE}"

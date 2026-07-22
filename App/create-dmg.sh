@@ -7,7 +7,7 @@ APP_NAME="G9 Helper"
 DMG_NAME="G9.Helper"
 BUILD_DIR="build"
 DMG_DIR="${BUILD_DIR}/dmg"
-VERSION="1.2.4"
+VERSION="1.2.5"
 
 echo "Creating DMG..."
 
@@ -26,7 +26,7 @@ ln -s /Applications "${DMG_DIR}/Applications"
 
 # Create README
 cat > "${DMG_DIR}/README.txt" << 'EOF'
-G9 Helper v1.2.4 - Free Software
+G9 Helper v1.2.5 - Free Software
 
 Unlock crisp HiDPI (Retina) scaling on Samsung Odyssey G9
 and other large monitors.
@@ -71,6 +71,27 @@ hdiutil create -volname "${APP_NAME}" \
 # Clean up
 rm -rf "${DMG_DIR}"
 
-echo "DMG created: ${BUILD_DIR}/${DMG_NAME}.dmg"
+DMG_FILE="${BUILD_DIR}/${DMG_NAME}.dmg"
+echo "DMG created: ${DMG_FILE}"
+
+# Notarize and staple so the DMG installs by double-click on other Macs without
+# a Gatekeeper prompt. Requires a stored notarytool credential profile — create
+# it once with:
+#   xcrun notarytool store-credentials g9-notary \
+#       --apple-id <apple-id> --team-id D76ZAFG74A --password <app-specific-password>
+# Skips cleanly (leaving a signed-but-unnotarized DMG) when the profile is absent.
+NOTARY_PROFILE="${G9_NOTARY_PROFILE:-g9-notary}"
+if xcrun notarytool history --keychain-profile "${NOTARY_PROFILE}" >/dev/null 2>&1; then
+    echo "Submitting for notarization (profile: ${NOTARY_PROFILE})..."
+    xcrun notarytool submit "${DMG_FILE}" --keychain-profile "${NOTARY_PROFILE}" --wait
+    echo "Stapling notarization ticket..."
+    xcrun stapler staple "${DMG_FILE}"
+    xcrun stapler validate "${DMG_FILE}"
+    echo "Notarized and stapled."
+else
+    echo "No notarytool profile '${NOTARY_PROFILE}' found — skipping notarization."
+    echo "The DMG is Developer ID signed but NOT notarized (Gatekeeper will still prompt)."
+fi
+
 echo ""
-echo "File size: $(du -h "${BUILD_DIR}/${DMG_NAME}.dmg" | cut -f1)"
+echo "File size: $(du -h "${DMG_FILE}" | cut -f1)"
