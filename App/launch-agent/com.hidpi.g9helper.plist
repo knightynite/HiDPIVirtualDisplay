@@ -22,7 +22,7 @@
     </dict>
 
     <key>ThrottleInterval</key>
-    <integer>5</integer>
+    <integer>2</integer>
 
     <key>StandardOutPath</key>
     <string>/tmp/g9helper.log</string>

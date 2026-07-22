@@ -84,7 +84,7 @@ class LaunchAgentManager {
                     <true/>
                 </dict>
                 <key>ThrottleInterval</key>
-                <integer>5</integer>
+                <integer>2</integer>
                 <key>StandardOutPath</key>
                 <string>/tmp/g9helper.log</string>
                 <key>StandardErrorPath</key>
@@ -1275,17 +1275,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kWasDisconnectedKey = "wasDisconnected"
 
     func relaunchApp() {
-        // Wait for this instance to actually exit before `open` fires —
-        // `open` on a still-running app just activates it and the relaunch
-        // never happens. Polls up to 20s, then opens regardless (harmless
-        // no-op if we're somehow still alive).
+        // Switching a preset (or cleaning up after a disconnect) restarts the app
+        // so macOS reclaims the old virtual display object — CGVirtualDisplay only
+        // frees on process exit. Coming back reliably needs BOTH mechanisms below,
+        // because neither covers every install on its own:
+        //
+        //  * Under the launch agent (com.hidpi.g9helper, KeepAlive with
+        //    SuccessfulExit=false) a CLEAN exit (0) is read as "user quit" and the
+        //    job is left dead. The old code called NSApp.terminate(nil), which
+        //    exits 0, so picking a resolution killed the menu-bar app for good
+        //    (looked like a crash). Reopening a KeepAlive-suppressed job with
+        //    `open` is also refused, so the helper alone could not revive it.
+        //    Exiting NON-ZERO flips launchd's decision to "relaunch" — the
+        //    deterministic path.
+        //
+        //  * Drag-installed with no agent (or the Start-at-Login plist is written
+        //    but not yet loaded, before the next login) a non-zero exit relaunches
+        //    nothing, so a detached helper reopens the bundle. It waits for this
+        //    process to fully exit, pauses past the agent's ThrottleInterval, then
+        //    reopens ONLY if nothing came back on its own — so it never spawns a
+        //    duplicate alongside a launchd relaunch.
+        let bundlePath = Bundle.main.bundlePath
         let task = Process()
         task.launchPath = "/bin/sh"
-        task.arguments = ["-c", "for i in $(seq 1 40); do /usr/bin/pgrep -x HiDPIDisplay >/dev/null || break; /bin/sleep 0.5; done; /usr/bin/open \"\(Bundle.main.bundlePath)\""]
+        task.arguments = ["-c", "for i in $(seq 1 40); do /usr/bin/pgrep -x HiDPIDisplay >/dev/null || break; /bin/sleep 0.5; done; /bin/sleep 5; /usr/bin/pgrep -x HiDPIDisplay >/dev/null || /usr/bin/open \"\(bundlePath)\""]
         task.launch()
 
-        // Terminate current instance
-        NSApp.terminate(nil)
+        // Run the same teardown applicationWillTerminate would (exit() bypasses
+        // it) so the preset is preserved for auto-restore, then exit non-zero so
+        // the launch agent's KeepAlive brings us right back.
+        stopDisplayChangeMonitoring()
+        disableHiDPIForDisconnect()
+        debugLog("Restarting to switch preset (exit non-zero; helper on standby)")
+        exit(2)
     }
 
     private let cleanupMarkerPath = "/tmp/g9helper-cleanup-marker"
