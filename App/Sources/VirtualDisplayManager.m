@@ -320,27 +320,152 @@ static void retainWindowIfNeeded(NSWindow *window) {
     return [self mirrorDisplay:sourceDisplayID toDisplay:targetDisplayID atRate:0.0];
 }
 
-/// Find the largest-pixel-count mode on `displayID` whose refresh rate matches
-/// `refreshRate` within 0.5 Hz. Returns NULL if no match. Caller owns the
-/// returned mode and must release it via CGDisplayModeRelease().
-static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double refreshRate) {
+/// Copy the panel's desktop-usable mode list. Caller owns the result.
+static CFArrayRef VDMCopyDesktopModes(CGDirectDisplayID displayID) {
     NSDictionary *opts = @{ (__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES };
-    CFArrayRef modes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
-    if (!modes) return NULL;
+    return CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)opts);
+}
 
-    CGDisplayModeRef best = NULL;
-    size_t bestPixels = 0;
+/// IOKit marks the timings the panel declares as its own. Not in the CoreGraphics
+/// headers, but CGDisplayModeGetIOFlags returns the IOKit flag word verbatim.
+static const uint32_t kVDMDisplayModeNativeFlag = 0x02000000;
+
+/// Whether a mode maps one point to one pixel, i.e. a real scanout mode rather
+/// than a HiDPI or scaled duplicate of a smaller one.
+static BOOL VDMIsOneToOne(CGDisplayModeRef mode) {
+    return CGDisplayModeGetWidth(mode) == CGDisplayModeGetPixelWidth(mode) &&
+           CGDisplayModeGetHeight(mode) == CGDisplayModeGetPixelHeight(mode);
+}
+
+/// The panel's native pixel grid.
+///
+/// Prefers the timings IOKit flags as native, because "biggest mode in the list"
+/// is not trustworthy here: while a mirror is attached, the target inherits the
+/// source's mode, so a physical 7680x2160 panel mirroring a 5120x1440 HiDPI
+/// virtual reports a 10240x2880 mode it cannot actually scan out. Falls back to
+/// the largest one-to-one mode for panels that flag nothing.
+/// Returns NO when the panel reports nothing usable.
+/// Native pixel grid within an already-copied mode list. Callers that also walk
+/// the list share this so both see one snapshot: the list can change under a
+/// mode switch, and picking a native size out of one array while searching
+/// another can leave the search with nothing to match.
+static BOOL VDMNativePixelSizeInModes(CFArrayRef modes, size_t *outWidth, size_t *outHeight) {
+    size_t flaggedW = 0, flaggedH = 0, flaggedPixels = 0;
+    size_t oneToOneW = 0, oneToOneH = 0, oneToOnePixels = 0;
+
     CFIndex count = CFArrayGetCount(modes);
     for (CFIndex i = 0; i < count; i++) {
         CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
-        double rate = CGDisplayModeGetRefreshRate(mode);
-        if (fabs(rate - refreshRate) > 0.5) continue;
-        size_t pixels = CGDisplayModeGetWidth(mode) * CGDisplayModeGetHeight(mode);
-        if (pixels > bestPixels) {
-            bestPixels = pixels;
-            best = mode;
+        if (!CGDisplayModeIsUsableForDesktopGUI(mode)) continue;
+        // Both candidates require one-to-one. The native flag travels with an
+        // inherited mirror mode as readily as with a real one, so on its own it
+        // is not enough to tell the panel's own timings from the source's.
+        if (!VDMIsOneToOne(mode)) continue;
+
+        size_t w = CGDisplayModeGetPixelWidth(mode);
+        size_t h = CGDisplayModeGetPixelHeight(mode);
+
+        if ((CGDisplayModeGetIOFlags(mode) & kVDMDisplayModeNativeFlag) && w * h > flaggedPixels) {
+            flaggedPixels = w * h;
+            flaggedW = w;
+            flaggedH = h;
+        }
+        if (w * h > oneToOnePixels) {
+            oneToOnePixels = w * h;
+            oneToOneW = w;
+            oneToOneH = h;
         }
     }
+
+    size_t w = flaggedPixels ? flaggedW : oneToOneW;
+    size_t h = flaggedPixels ? flaggedH : oneToOneH;
+    if (w == 0 || h == 0) return NO;
+    if (outWidth) *outWidth = w;
+    if (outHeight) *outHeight = h;
+    return YES;
+}
+
+BOOL VDMNativePixelSize(CGDirectDisplayID displayID, size_t *outWidth, size_t *outHeight) {
+    CFArrayRef modes = VDMCopyDesktopModes(displayID);
+    if (!modes) return NO;
+    BOOL found = VDMNativePixelSizeInModes(modes, outWidth, outHeight);
+    CFRelease(modes);
+    return found;
+}
+
+/// Pick the mode to pin the physical panel to before mirroring.
+///
+/// Resolution wins over refresh rate. Pinning below the native pixel grid to
+/// hit a requested rate makes the monitor rescale everything the mirror sends
+/// it, which costs far more detail than the extra frames are worth. Bandwidth
+/// limited links hit this constantly: a panel that does native at 60 Hz but
+/// only half-height at 120 Hz used to get pinned to the half-height mode.
+///
+/// Order of preference:
+///   1. native pixel grid at the requested rate
+///   2. native pixel grid at its own highest rate
+///   3. largest mode at the requested rate (only if native size is unknown)
+///
+/// Returns NULL if nothing matches. Caller owns the returned mode and must
+/// release it via CGDisplayModeRelease().
+static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double refreshRate) {
+    CFArrayRef modes = VDMCopyDesktopModes(displayID);
+    if (!modes) return NULL;
+
+    size_t nativeW = 0, nativeH = 0;
+    BOOL haveNative = VDMNativePixelSizeInModes(modes, &nativeW, &nativeH);
+
+    CGDisplayModeRef nativeAtRate = NULL;   // native grid, requested rate
+    CGDisplayModeRef nativeFastest = NULL;  // native grid, highest rate
+    CGDisplayModeRef anyAtRate = NULL;      // last resort: biggest at requested rate
+    double nativeFastestRate = -1;
+    size_t anyAtRatePixels = 0;
+
+    CFIndex count = CFArrayGetCount(modes);
+    for (CFIndex i = 0; i < count; i++) {
+        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if (!CGDisplayModeIsUsableForDesktopGUI(mode)) continue;
+        // Only ever pin a one-to-one mode. Handing the panel a HiDPI duplicate
+        // would put it in a scaled desktop mode, which is what we are trying to
+        // avoid in the first place.
+        if (!VDMIsOneToOne(mode)) continue;
+
+        double rate = CGDisplayModeGetRefreshRate(mode);
+        BOOL rateMatches = fabs(rate - refreshRate) <= 0.5;
+
+        size_t pw = CGDisplayModeGetPixelWidth(mode);
+        size_t ph = CGDisplayModeGetPixelHeight(mode);
+
+        if (haveNative && pw == nativeW && ph == nativeH) {
+            if (rateMatches && !nativeAtRate) nativeAtRate = mode;
+            // nativeFastestRate is seeded at -1, so a panel that reports 0 Hz
+            // for its native timing still lands here rather than falling
+            // through to a smaller mode.
+            if (rate > nativeFastestRate) {
+                nativeFastestRate = rate;
+                nativeFastest = mode;
+            }
+        }
+
+        if (rateMatches && pw * ph > anyAtRatePixels) {
+            anyAtRatePixels = pw * ph;
+            anyAtRate = mode;
+        }
+    }
+
+    CGDisplayModeRef best = nativeAtRate;
+    if (!best) best = nativeFastest;
+    if (best && best != nativeAtRate) {
+        NSLog(@"VDM: Panel %u has no %.1f Hz mode at native %zux%zu — keeping native at %.1f Hz "
+              @"instead of dropping resolution", displayID, refreshRate, nativeW, nativeH,
+              CGDisplayModeGetRefreshRate(best));
+    }
+    if (!best && anyAtRate) {
+        NSLog(@"VDM: WARN - Panel %u offers no native-size mode, falling back to largest mode at %.1f Hz",
+              displayID, refreshRate);
+        best = anyAtRate;
+    }
+
     CGDisplayModeRef retained = best ? (CGDisplayModeRef)CGDisplayModeRetain(best) : NULL;
     CFRelease(modes);
     return retained;

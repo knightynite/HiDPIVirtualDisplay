@@ -2086,11 +2086,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("HiDPI disabled (preset cleared)")
     }
 
-    /// Find the highest refresh rate the panel supports across any of its modes.
-    /// More reliable than CGDisplayCopyDisplayMode for "Auto" because the
+    /// Find the highest refresh rate the panel supports *at its native pixel
+    /// grid*. More reliable than CGDisplayCopyDisplayMode for "Auto" because the
     /// current mode can briefly report a transient low rate during the
     /// teardown/recreate window after a relaunch.
+    ///
+    /// Rates that only exist on smaller modes are deliberately excluded. Taking
+    /// the max across every mode used to pick a rate the panel can only reach by
+    /// shrinking, and the mirror pin would then drop the panel below native to
+    /// reach it. On a bandwidth limited link (HDMI on a base M4 driving a dual
+    /// 4K panel, say) that turned a 120 Hz request into a half-resolution
+    /// desktop the monitor had to upscale.
     func maxSupportedRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
+        if let best = nativeRefreshRates(displayID).max() {
+            return best
+        }
+
+        // Native size unreadable or it publishes no rate at all (some panels
+        // report 0 Hz for their only mode). Fall back to the old whole-list max.
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else {
             return 60.0
@@ -2099,23 +2112,80 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return rates.max() ?? 60.0
     }
 
+    /// Every refresh rate the panel offers on its native pixel grid, ascending.
+    /// Empty when the native size can't be read or the panel publishes no rate
+    /// there, in which case callers keep their pre-1.2.6 behavior.
+    func nativeRefreshRates(_ displayID: CGDirectDisplayID) -> [Double] {
+        var nativeWidth = 0, nativeHeight = 0
+        guard VDMNativePixelSize(displayID, &nativeWidth, &nativeHeight) else { return [] }
+        let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else {
+            return []
+        }
+        // Same eligibility test the pin uses. A rate that only exists on a mode
+        // the pin would skip is a rate we must not hand back, or the virtual
+        // source and the panel end up running at different rates.
+        let rates = modes.compactMap { mode -> Double? in
+            guard mode.isUsableForDesktopGUI(), mode.isNativeGrid(nativeWidth, nativeHeight),
+                  mode.refreshRate > 0 else { return nil }
+            return mode.refreshRate
+        }
+        return Array(Set(rates)).sorted()
+    }
+
     /// Get the refresh rate for the virtual display.
-    /// Auto = panel's max supported rate. Custom rates are clamped to that max
-    /// so picking 240Hz on a 120Hz-max panel uses 120Hz instead of silently
-    /// failing.
+    ///
+    /// Auto = the panel's highest rate at native resolution. A custom rate is
+    /// snapped to one the panel actually offers at native, never merely clamped:
+    /// the same value pins the physical target, so handing back a rate the panel
+    /// doesn't have at native would leave the virtual source and the panel
+    /// running at different rates, which is the uneven pacing the pin exists to
+    /// prevent. When the request falls between two supported rates we snap down,
+    /// since a user who lowered the rate usually did so to stop flicker.
     func getDisplayRefreshRate(_ displayID: CGDirectDisplayID) -> Double {
         let maxRate = maxSupportedRefreshRate(displayID)
         let customRate = UserDefaults.standard.double(forKey: kRefreshRateKey)
-        if customRate > 0 {
+        guard customRate > 0 else {
+            debugLog("Auto: using \(maxRate) Hz, the panel's fastest mode at native resolution")
+            return maxRate
+        }
+
+        let supported = nativeRefreshRates(displayID)
+        guard !supported.isEmpty else {
+            // Native rates unknown, so fall back to the old clamp.
             if customRate > maxRate + 0.5 {
-                debugLog("Requested \(customRate) Hz exceeds panel max (\(maxRate) Hz), clamping to \(maxRate) Hz")
+                debugLog("Requested \(customRate) Hz exceeds panel max (\(maxRate) Hz), using \(maxRate) Hz")
                 return maxRate
             }
-            debugLog("Using custom refresh rate: \(customRate) Hz (panel max \(maxRate) Hz)")
+            debugLog("Using custom refresh rate: \(customRate) Hz (native rates unknown)")
             return customRate
         }
-        debugLog("Auto: using panel max refresh rate \(maxRate) Hz")
-        return maxRate
+
+        if let exact = supported.first(where: { abs($0 - customRate) <= 0.5 }) {
+            debugLog("Using custom refresh rate: \(exact) Hz (panel offers \(supported) Hz at native)")
+            return exact
+        }
+
+        let snapped = supported.last(where: { $0 < customRate }) ?? supported[0]
+        debugLog("Requested \(customRate) Hz isn't available at native resolution (panel offers \(supported) Hz), using \(snapped) Hz")
+        return snapped
+    }
+
+    /// One-line summary of what the panel offers, written to the log whenever we
+    /// set up a mirror. Bug reports about softness or refresh rate are almost
+    /// always answered by this line, and asking a reporter to enumerate modes by
+    /// hand is a round trip nobody enjoys.
+    func logPanelModeSummary(_ displayID: CGDirectDisplayID) {
+        var nativeWidth = 0, nativeHeight = 0
+        guard VDMNativePixelSize(displayID, &nativeWidth, &nativeHeight) else {
+            debugLog("Panel \(displayID): native size unreadable")
+            return
+        }
+        let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        let modes = (CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode]) ?? []
+        let atNative = nativeRefreshRates(displayID).map { Int($0.rounded()) }
+        let anyRates = Set(modes.compactMap { $0.refreshRate > 0 ? Int($0.refreshRate.rounded()) : nil }).sorted()
+        debugLog("Panel \(displayID): native \(nativeWidth)x\(nativeHeight), rates at native \(atNative) Hz, all rates \(anyRates) Hz")
     }
 
     func createVirtualDisplayAsync(config: PresetConfig, generation: Int) {
@@ -2138,6 +2208,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         debugLog("Using external display: \(externalID)")
+        logPanelModeSummary(externalID)
 
         StatusWindowController.shared.updateStatus("Creating virtual display...")
 
@@ -2472,6 +2543,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // MARK: - Preset Configurations
+
+extension CGDisplayMode {
+    /// A real scanout mode sitting exactly on the panel's native grid. Mirrors
+    /// the one-to-one test the pin uses, so the rate we pick and the mode we pin
+    /// can never disagree about what counts as native.
+    func isNativeGrid(_ nativeWidth: Int, _ nativeHeight: Int) -> Bool {
+        return pixelWidth == nativeWidth && pixelHeight == nativeHeight &&
+               width == pixelWidth && height == pixelHeight
+    }
+}
 
 struct PresetConfig {
     let name: String

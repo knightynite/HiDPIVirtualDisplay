@@ -6,6 +6,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// The panel's native pixel grid — the largest pixel count it will accept,
+/// measured in real pixels rather than points. Both the refresh-rate picker and
+/// the mirror pin key off this, so they have to agree on one definition.
+/// Returns NO when the panel reports no usable mode.
+BOOL VDMNativePixelSize(CGDirectDisplayID displayID,
+                        size_t * _Nullable outWidth,
+                        size_t * _Nullable outHeight);
+
 @interface VirtualDisplayManager : NSObject
 
 /// Shared instance
