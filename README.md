@@ -30,7 +30,7 @@ brew install knightynite/g9-helper/g9-helper
 
 Grab [`G9.Helper-v1.2.6.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.6/G9.Helper-v1.2.6.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
-macOS will probably block it on first launch — right-click the app, hit "Open", confirm in the dialog.
+The app is signed and notarized by Apple, so it opens without a security prompt.
 
 ### Build from source
 
@@ -119,7 +119,7 @@ cd /path/to/HiDPIVirtualDisplay/App
 
 ## Troubleshooting
 
-**App won't open** — right-click, select "Open", confirm in the security dialog.
+**App won't open** — builds from 1.2.6 on are notarized and should open normally. If you are on an older build, or you built from source yourself, right-click the app, select "Open", and confirm in the security dialog.
 
 **Resolution doesn't apply** — disable HiDPI first, wait a few seconds, try again.
 

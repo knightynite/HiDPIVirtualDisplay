@@ -14,6 +14,34 @@ echo "Creating DMG..."
 # Build the app first
 ./build.sh
 
+# Notarize the app bundle and staple the ticket to it BEFORE packaging, so the
+# copy that ends up in /Applications carries its own ticket. Stapling only the
+# DMG leaves the dragged-out app relying on Gatekeeper reaching Apple to look
+# the ticket up, which fails on a machine that is offline the first time it
+# runs the app. Requires a stored notarytool credential profile — create it
+# once with:
+#   xcrun notarytool store-credentials g9-notary \
+#       --apple-id <apple-id> --team-id D76ZAFG74A --password <app-specific-password>
+# Skips cleanly (leaving a signed-but-unnotarized build) when the profile is absent.
+NOTARY_PROFILE="${G9_NOTARY_PROFILE:-g9-notary}"
+HAVE_NOTARY=0
+if xcrun notarytool history --keychain-profile "${NOTARY_PROFILE}" >/dev/null 2>&1; then
+    HAVE_NOTARY=1
+    APP_ZIP="${BUILD_DIR}/${DMG_NAME}-app.zip"
+    echo "Notarizing the app bundle (profile: ${NOTARY_PROFILE})..."
+    rm -f "${APP_ZIP}"
+    # ditto keeps the bundle's symlinks and extended attributes intact; zip -r
+    # would flatten them and invalidate the signature.
+    /usr/bin/ditto -c -k --keepParent "${BUILD_DIR}/${APP_NAME}.app" "${APP_ZIP}"
+    xcrun notarytool submit "${APP_ZIP}" --keychain-profile "${NOTARY_PROFILE}" --wait
+    rm -f "${APP_ZIP}"
+    xcrun stapler staple "${BUILD_DIR}/${APP_NAME}.app"
+    xcrun stapler validate "${BUILD_DIR}/${APP_NAME}.app"
+    echo "App notarized and stapled."
+else
+    echo "No notarytool profile '${NOTARY_PROFILE}' found — skipping notarization."
+fi
+
 # Create DMG directory
 rm -rf "${DMG_DIR}"
 mkdir -p "${DMG_DIR}"
@@ -35,10 +63,6 @@ INSTALLATION
 1. Drag "G9 Helper.app" to the Applications folder
 2. Launch from Applications or Spotlight
 3. Look for the display icon in your menu bar
-
-FIRST LAUNCH
-macOS may block the app. Right-click and select "Open",
-then click "Open" in the dialog.
 
 USAGE
 1. Click the display icon in your menu bar
@@ -74,22 +98,16 @@ rm -rf "${DMG_DIR}"
 DMG_FILE="${BUILD_DIR}/${DMG_NAME}.dmg"
 echo "DMG created: ${DMG_FILE}"
 
-# Notarize and staple so the DMG installs by double-click on other Macs without
-# a Gatekeeper prompt. Requires a stored notarytool credential profile — create
-# it once with:
-#   xcrun notarytool store-credentials g9-notary \
-#       --apple-id <apple-id> --team-id D76ZAFG74A --password <app-specific-password>
-# Skips cleanly (leaving a signed-but-unnotarized DMG) when the profile is absent.
-NOTARY_PROFILE="${G9_NOTARY_PROFILE:-g9-notary}"
-if xcrun notarytool history --keychain-profile "${NOTARY_PROFILE}" >/dev/null 2>&1; then
-    echo "Submitting for notarization (profile: ${NOTARY_PROFILE})..."
+# Notarize and staple the DMG as well, so the disk image itself opens without a
+# prompt. The app inside already carries its own ticket from the step above.
+if [ "${HAVE_NOTARY}" = "1" ]; then
+    echo "Submitting the DMG for notarization..."
     xcrun notarytool submit "${DMG_FILE}" --keychain-profile "${NOTARY_PROFILE}" --wait
     echo "Stapling notarization ticket..."
     xcrun stapler staple "${DMG_FILE}"
     xcrun stapler validate "${DMG_FILE}"
-    echo "Notarized and stapled."
+    echo "DMG notarized and stapled."
 else
-    echo "No notarytool profile '${NOTARY_PROFILE}' found — skipping notarization."
     echo "The DMG is Developer ID signed but NOT notarized (Gatekeeper will still prompt)."
 fi
 
