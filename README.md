@@ -115,6 +115,7 @@ cd /path/to/HiDPIVirtualDisplay/App
 - Switching presets or disabling HiDPI briefly restarts the app (virtual displays can only be fully torn down when the process exits)
 - Refresh rate is auto-detected; if your monitor flickers, set it manually under Settings > Refresh Rate
 - Since 1.2.6, resolution wins over refresh rate. If your cable or port can't carry the panel's native resolution at the rate you picked, the app uses the fastest rate that *does* run at native instead of shrinking the desktop. Bandwidth-limited HDMI links hit this most often
+- Adaptive Sync (VRR) can stay enabled in the monitor's OSD, but the panel is always driven at a fixed rate while HiDPI is active — variable refresh isn't usable while mirroring a fixed-rate virtual display (it breaks the hardware cursor). If the monitor offers its top rate only as a variable mode, the app uses the fastest *fixed* rate at native resolution instead, which may be lower. Turn Adaptive Sync off in the OSD to guarantee the full rate
 - Mirroring resamples unless the preset's framebuffer matches the panel exactly. On a 7680x2160 panel only the 3840x1080 (2.0x) preset is a 1:1 mirror; every other preset trades a little sharpness for smaller text
 
 ## Troubleshooting
