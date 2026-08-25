@@ -902,6 +902,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // 30s backstop for the deep Adaptive Sync mirror forming without a
+        // notification we acted on. Cheap no-op while the target is online.
+        if isActive && realMonitor != nil {
+            repinIfDeepMirrorFormed()
+        }
+
         // Case 1b: Orphaned virtual display exists (monitor gone, but isActive is false)
         // This can happen if mirror failed or app state got out of sync
         if !isActive && realMonitor == nil && hasOrphanedVirtualDisplay() {
@@ -1035,12 +1041,78 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         debugLog("Mirror link broken — re-attaching \(currentVirtualID) -> \(physical) without rebuild")
         let manager = VirtualDisplayManager.shared()
-        let ok = manager.mirrorDisplay(currentVirtualID, toDisplay: physical, atRate: getDisplayRefreshRate(physical))
+        let rate = getDisplayRefreshRate(physical)
+        let ok = manager.mirrorDisplay(currentVirtualID, toDisplay: physical, atRate: rate)
         debugLog("Re-attach mirror result: \(ok)")
         if ok {
             targetExternalDisplayID = physical
+            scheduleAdaptiveSyncRepin(target: physical, rate: rate)
         }
         return ok
+    }
+
+    /// On an Adaptive Sync panel, re-assert the fixed native mode AFTER the
+    /// mirror is (re)established. The mirror config re-modes the target into a
+    /// synthesized VRR mirror mode that hides the hardware cursor (issue #7).
+    ///
+    /// The trigger is load-bearing, and it is a STATE, not a delay: macOS
+    /// settles the mirror by dropping the target out of the online display
+    /// list (the "deep" hardware mirror). Re-pinning after that transition
+    /// completes restores a correct, visible cursor. Re-pinning while the
+    /// target is still online — whether immediately or on a fixed timer —
+    /// aborts the transition halfway and leaves the cursor drawn at the wrong
+    /// scale and position (all three variants verified on a G95NC with
+    /// Adaptive Sync on). So: poll until the target leaves the online list,
+    /// then re-pin; if it never leaves, do NOT touch the mode.
+    /// No-op for panels without Adaptive Sync. Generation-guarded like every
+    /// other delayed setup step.
+    func scheduleAdaptiveSyncRepin(target: CGDirectDisplayID, rate: Double) {
+        guard VirtualDisplayManager.shared().displayHasAdaptiveSync(target) else { return }
+        debugLog("Adaptive Sync panel detected — waiting for the deep mirror to settle before re-pinning")
+        pollAdaptiveSyncRepin(target: target, rate: rate, generation: setupGeneration, attempt: 1)
+    }
+
+    private func pollAdaptiveSyncRepin(target: CGDirectDisplayID, rate: Double, generation: Int, attempt: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self, generation == self.setupGeneration else {
+                debugLog("Adaptive Sync re-pin superseded by newer setup, skipping")
+                return
+            }
+            guard self.isActive, CGDisplayMirrorsDisplay(target) == self.currentVirtualID else {
+                debugLog("Adaptive Sync re-pin: mirror no longer active, skipping")
+                return
+            }
+            if self.displayIsOnline(target) {
+                if attempt < 60 {  // up to ~2 minutes
+                    self.pollAdaptiveSyncRepin(target: target, rate: rate,
+                                               generation: generation, attempt: attempt + 1)
+                } else {
+                    debugLog("Adaptive Sync re-pin: target \(target) never left the online list after \(attempt) checks — leaving mode alone")
+                }
+                return
+            }
+            debugLog("Adaptive Sync deep mirror settled after \(attempt * 2)s — re-pinning fixed mode")
+            let ok = VirtualDisplayManager.shared().reassertFixedMode(onDisplay: target, atRate: rate)
+            debugLog("Adaptive Sync re-pin result: \(ok)")
+        }
+    }
+
+    /// Event-driven companion to the setup-time poll above: macOS can
+    /// reorganize the mirror into the deep (offline) hardware clone at ANY
+    /// point, not just during setup — e.g. after the panel renegotiates its
+    /// link — and that state hides the cursor until the fixed mode is
+    /// re-asserted. Going offline fires a display-change notification, so this
+    /// runs from the notification handler: if our Adaptive Sync target is
+    /// offline but still mirroring us, re-pin. No-ops in the online (shallow
+    /// mirror) state, which needs no repair.
+    func repinIfDeepMirrorFormed() {
+        guard isActive, currentVirtualID != 0, targetExternalDisplayID != 0,
+              CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID,
+              !displayIsOnline(targetExternalDisplayID) else { return }
+        let manager = VirtualDisplayManager.shared()
+        guard manager.displayHasAdaptiveSync(targetExternalDisplayID) else { return }
+        _ = manager.reassertFixedMode(onDisplay: targetExternalDisplayID,
+                                      atRate: getDisplayRefreshRate(targetExternalDisplayID))
     }
 
     /// Re-apply the optional HDR and main-display preferences after the mirror
@@ -1084,6 +1156,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // mirror (e.g. the monitor enumerated after the wake
                 // assessment gave up). Repair in place; no-op when intact.
                 ensureMirrorIntact()
+                // If this notification was the panel dropping into the deep
+                // (offline) Adaptive Sync mirror, restore the fixed mode.
+                repinIfDeepMirrorFormed()
             }
             return
         }
@@ -1170,6 +1245,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return displayID
             }
         }
+
+        // With Adaptive Sync enabled in the monitor's OSD, macOS takes the
+        // hardware-mirror target out of the online display list entirely while
+        // our mirror is active. The mirror relationship is still queryable on
+        // the offline display, so check it before concluding the monitor was
+        // unplugged — otherwise every display-change notification reads as a
+        // disconnect and tears down a healthy setup.
+        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+           CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
+            if verbose {
+                debugLog("Monitor \(targetExternalDisplayID) is offline but still mirrors our virtual display (Adaptive Sync hardware mirror) — treating as connected")
+            }
+            return targetExternalDisplayID
+        }
+
         if verbose {
             debugLog("No real physical monitor found")
         }
@@ -2104,11 +2194,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Native size unreadable or it publishes no rate at all (some panels
         // report 0 Hz for their only mode). Fall back to the old whole-list max.
+        // VRR modes are excluded here too — their advertised (maximum) rate is
+        // one the pin can't hold the panel at, so handing it back would leave
+        // the virtual source and the panel at different rates.
         let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode] else {
             return 60.0
         }
-        let rates = modes.compactMap { $0.refreshRate > 0 ? $0.refreshRate : nil }
+        let rates = modes.compactMap { mode -> Double? in
+            guard mode.refreshRate > 0, !VDMDisplayModeIsVRR(displayID, mode) else { return nil }
+            return mode.refreshRate
+        }
         return rates.max() ?? 60.0
     }
 
@@ -2124,10 +2220,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Same eligibility test the pin uses. A rate that only exists on a mode
         // the pin would skip is a rate we must not hand back, or the virtual
-        // source and the panel end up running at different rates.
+        // source and the panel end up running at different rates. That includes
+        // VRR (Adaptive Sync) modes: with Adaptive Sync on in the monitor's OSD
+        // the top rate may exist only as a variable mode, and pinning that mode
+        // breaks the hardware cursor (issue #7).
         let rates = modes.compactMap { mode -> Double? in
             guard mode.isUsableForDesktopGUI(), mode.isNativeGrid(nativeWidth, nativeHeight),
-                  mode.refreshRate > 0 else { return nil }
+                  mode.refreshRate > 0,
+                  !VDMDisplayModeIsVRR(displayID, mode) else { return nil }
             return mode.refreshRate
         }
         return Array(Set(rates)).sorted()
@@ -2185,7 +2285,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let modes = (CGDisplayCopyAllDisplayModes(displayID, opts) as? [CGDisplayMode]) ?? []
         let atNative = nativeRefreshRates(displayID).map { Int($0.rounded()) }
         let anyRates = Set(modes.compactMap { $0.refreshRate > 0 ? Int($0.refreshRate.rounded()) : nil }).sorted()
-        debugLog("Panel \(displayID): native \(nativeWidth)x\(nativeHeight), rates at native \(atNative) Hz, all rates \(anyRates) Hz")
+        let vrrCount = modes.filter { VDMDisplayModeIsVRR(displayID, $0) }.count
+        debugLog("Panel \(displayID): native \(nativeWidth)x\(nativeHeight), fixed rates at native \(atNative) Hz, all rates \(anyRates) Hz, adaptive sync \(vrrCount > 0 ? "ON (\(vrrCount) VRR modes)" : "off")")
     }
 
     func createVirtualDisplayAsync(config: PresetConfig, generation: Int) {
@@ -2279,6 +2380,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             targetExternalDisplayID = externalID  // Track target for disconnect detection
             UserDefaults.standard.set(0, forKey: kMirrorFailureCountKey)  // Reset failure counter
             saveMonitorFingerprint(externalID)
+            scheduleAdaptiveSyncRepin(target: externalID, rate: pinRate)
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
 
@@ -2423,6 +2525,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return best.id
         }
 
+        // Same Adaptive Sync fallback as findRealPhysicalMonitor: the active
+        // hardware-mirror target is offline (not enumerated) but still ours.
+        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+           CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
+            debugLog("  -> Mirror target \(targetExternalDisplayID) offline but mirror intact (Adaptive Sync) — using it")
+            return targetExternalDisplayID
+        }
+
         debugLog("  -> No external display found")
         return nil
     }
@@ -2456,6 +2566,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func connectedMonitorMatchesSavedPreset() -> Bool {
         guard UserDefaults.standard.object(forKey: kBoundMonitorVendorKey) != nil else {
+            return true
+        }
+
+        // An offline-but-mirrored target (Adaptive Sync hardware mirror) can't
+        // be fingerprinted from the online list, but it IS the monitor the
+        // preset was applied to — we set the mirror up on it.
+        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+           CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
             return true
         }
 

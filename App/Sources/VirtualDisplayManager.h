@@ -14,6 +14,16 @@ BOOL VDMNativePixelSize(CGDirectDisplayID displayID,
                         size_t * _Nullable outWidth,
                         size_t * _Nullable outHeight);
 
+/// Whether a display mode is variable-refresh (Adaptive Sync / ProMotion).
+/// With Adaptive Sync enabled in a monitor's OSD, macOS marks the top-rate
+/// modes as VRR; they report the same size and (maximum) refresh rate as fixed
+/// modes, so this is the only way to tell them apart. Both the refresh-rate
+/// picker and the mirror pin must skip VRR modes: mirroring a fixed-rate
+/// virtual source onto a variable-rate panel glitches the hardware cursor
+/// plane (issue #7). Resolved from SkyLight at runtime; returns NO (fixed)
+/// when the symbol is unavailable, matching pre-fix behavior.
+BOOL VDMDisplayModeIsVRR(CGDirectDisplayID displayID, CGDisplayModeRef _Nullable mode);
+
 @interface VirtualDisplayManager : NSObject
 
 /// Shared instance
@@ -62,6 +72,20 @@ BOOL VDMNativePixelSize(CGDirectDisplayID displayID,
 - (BOOL)mirrorDisplay:(CGDirectDisplayID)sourceDisplayID
             toDisplay:(CGDirectDisplayID)targetDisplayID
                atRate:(double)refreshRate;
+
+/// Whether the panel advertises any Adaptive Sync (VRR) modes, i.e. Adaptive
+/// Sync is enabled in the monitor's OSD.
+- (BOOL)displayHasAdaptiveSync:(CGDirectDisplayID)displayID;
+
+/// Re-assert the fixed-rate native mode on a mirrored Adaptive Sync panel.
+/// The mirror call re-modes the target into a synthesized VRR mirror mode
+/// that breaks the hardware cursor (issue #7); applying the fixed mode on top
+/// of the SETTLED mirror repairs it. Call only once the target has dropped
+/// out of the online display list (the deep hardware mirror forming) —
+/// re-pinning while it is still online aborts that transition and leaves the
+/// cursor drawn at the wrong scale and position.
+/// Returns YES if the panel is (already or now) in the intended fixed mode.
+- (BOOL)reassertFixedModeOnDisplay:(CGDirectDisplayID)displayID atRate:(double)refreshRate;
 
 /// Stop mirroring for a display
 /// @param displayID The display to stop mirroring
