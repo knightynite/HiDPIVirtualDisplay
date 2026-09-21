@@ -123,6 +123,15 @@ let presets: [DisplayPreset] = [
         logicalHeight: 1080,
         ppi: 140
     ),
+    DisplayPreset(
+        name: "g9-57-3840x1080-lodpi",
+        description: "Samsung G9 57\" LoDPI at half resolution (no scaling, sharp)",
+        framebufferWidth: 3840,
+        framebufferHeight: 1080,
+        logicalWidth: 3840,
+        logicalHeight: 1080,
+        ppi: 140
+    ),
 
     // Samsung G9 49" (5120x1440 native) - Fractional scaling options
     DisplayPreset(
@@ -402,7 +411,7 @@ func printUsage() {
         hidpi-virtual-display list
 
         # Create a virtual display with G9 5120x1440 HiDPI preset
-        hidpi-virtual-display create g9-5120x1440
+        hidpi-virtual-display create g9-57-5120x1440
 
         # Mirror the virtual display (ID from create) to your G9
         hidpi-virtual-display mirror <virtual-id> <g9-id>
@@ -496,11 +505,44 @@ func printPresets() {
     printPresetSection("38\" Ultrawide Presets (3840x1600 native)", presets: presets.filter { $0.name.hasPrefix("uw38-") })
     printPresetSection("4K Presets (3840x2160 native)", presets: presets.filter { $0.name.hasPrefix("4k-") && !$0.name.hasSuffix("-hidpi") })
     printPresetSection("Other Legacy CLI Aliases", presets: presets.filter { $0.name.hasSuffix("-hidpi") })
+
+    // Anything matching none of the sections above still gets listed, so a
+    // future preset can never be creatable but invisible here.
+    let shown = Set(["g9-57-", "g9-49-", "uw34-", "uw38-"])
+    let unlisted = presets.filter { p in
+        !shown.contains(where: { p.name.hasPrefix($0) })
+            && !(p.name.hasPrefix("4k-") && !p.name.hasSuffix("-hidpi"))
+            && !p.name.hasSuffix("-hidpi")
+    }
+    printPresetSection("Other Presets", presets: unlisted)
+
+    if !legacyPresetAliases.isEmpty {
+        print(colorize("\nLegacy names (still accepted):", .bold))
+        for (old, new) in legacyPresetAliases.sorted(by: { $0.key < $1.key }) {
+            print("        \(colorize(old, .cyan)) -> \(new)")
+        }
+    }
 }
+
+// Legacy CLI preset names from before the family-prefixed rename. Kept
+// working so existing scripts don't break; mirrors migratePresetName() in
+// the app. Deliberately not listed as presets of their own.
+let legacyPresetAliases: [String: String] = [
+    "g9-native-hidpi": "g9-57-3840x1080",
+    "g9-5120x1440": "g9-57-5120x1440",
+    "g9-4800x1350": "g9-57-4800x1350",
+    "g9-4480x1260": "g9-57-4389x1234",  // closest match, same as the app
+    "g9-3840x1080-lodpi": "g9-57-3840x1080-lodpi",
+]
 
 func createFromPreset(_ presetName: String) -> CGDirectDisplayID {
 
-    guard let preset = presets.first(where: { $0.name == presetName }) else {
+    let resolvedName = legacyPresetAliases[presetName] ?? presetName
+    if resolvedName != presetName {
+        print(colorize("Note: '\(presetName)' is a legacy name, using '\(resolvedName)'", .yellow))
+    }
+
+    guard let preset = presets.first(where: { $0.name == resolvedName }) else {
         print(colorize("Error: Unknown preset '\(presetName)'", .red))
         print("Use 'presets' command to see available presets")
         return CGDirectDisplayID(kCGNullDirectDisplay)
