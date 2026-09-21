@@ -30,6 +30,9 @@ static id _windowObserver = nil;
 }
 @end
 
+// Defined in the HDR section below; also used for VRR mode detection.
+static void *VDMSkyLightHandle(void);
+
 /// Read a 16-bit fixed-point chromaticity value from a nested CF dictionary.
 /// DisplayAttributes stores chromaticity as integers in [0, 65536] range.
 static CGFloat cfDictGetFixed16(CFDictionaryRef dict, CFStringRef key) {
@@ -393,6 +396,27 @@ BOOL VDMNativePixelSize(CGDirectDisplayID displayID, size_t *outWidth, size_t *o
     return found;
 }
 
+// SkyLight's per-mode VRR query. The mode number it takes is the CGS mode
+// index, which CGDisplayModeGetIODisplayModeID returns on Apple Silicon.
+// On Intel the two ID spaces may differ, but the function bounds-checks the
+// index against the display's mode table (confirmed by disassembly) and
+// returns false out of range — i.e. "fixed", the safe pre-fix behavior.
+typedef bool (*SLSIsDisplayModeVRRFn)(int displayID, int modeNum);
+
+BOOL VDMDisplayModeIsVRR(CGDirectDisplayID displayID, CGDisplayModeRef mode) {
+    if (!mode) return NO;
+    static SLSIsDisplayModeVRRFn fn = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        fn = (SLSIsDisplayModeVRRFn)dlsym(VDMSkyLightHandle(), "SLSIsDisplayModeVRR");
+        if (!fn) {
+            NSLog(@"VDM: SLSIsDisplayModeVRR unavailable — treating all modes as fixed-rate");
+        }
+    });
+    if (!fn) return NO;
+    return fn((int)displayID, CGDisplayModeGetIODisplayModeID(mode)) ? YES : NO;
+}
+
 /// Pick the mode to pin the physical panel to before mirroring.
 ///
 /// Resolution wins over refresh rate. Pinning below the native pixel grid to
@@ -401,10 +425,19 @@ BOOL VDMNativePixelSize(CGDirectDisplayID displayID, size_t *outWidth, size_t *o
 /// limited links hit this constantly: a panel that does native at 60 Hz but
 /// only half-height at 120 Hz used to get pinned to the half-height mode.
 ///
+/// Variable-refresh (Adaptive Sync) modes are never preferred. With Adaptive
+/// Sync enabled in the monitor's OSD, macOS marks the panel's top-rate modes
+/// as VRR, and they are indistinguishable from fixed modes by size and rate
+/// alone — so the pin used to land on one, leaving the panel in variable
+/// scanout while mirroring a fixed-rate virtual source. That combination
+/// glitches the hardware cursor plane (the disappearing cursor of issue #7).
+///
 /// Order of preference:
-///   1. native pixel grid at the requested rate
-///   2. native pixel grid at its own highest rate
-///   3. largest mode at the requested rate (only if native size is unknown)
+///   1. native pixel grid at the requested rate, fixed-rate
+///   2. native pixel grid at its own highest fixed rate
+///   3. native pixel grid at the requested rate, VRR (only if native has no
+///      fixed mode at all — keeps today's behavior rather than downscaling)
+///   4. largest fixed mode at the requested rate (only if native size is unknown)
 ///
 /// Returns NULL if nothing matches. Caller owns the returned mode and must
 /// release it via CGDisplayModeRelease().
@@ -415,9 +448,10 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     size_t nativeW = 0, nativeH = 0;
     BOOL haveNative = VDMNativePixelSizeInModes(modes, &nativeW, &nativeH);
 
-    CGDisplayModeRef nativeAtRate = NULL;   // native grid, requested rate
-    CGDisplayModeRef nativeFastest = NULL;  // native grid, highest rate
-    CGDisplayModeRef anyAtRate = NULL;      // last resort: biggest at requested rate
+    CGDisplayModeRef nativeAtRate = NULL;    // native grid, requested rate, fixed
+    CGDisplayModeRef nativeFastest = NULL;   // native grid, highest fixed rate
+    CGDisplayModeRef nativeVRRAtRate = NULL; // native grid, requested rate, VRR
+    CGDisplayModeRef anyAtRate = NULL;       // last resort: biggest fixed at requested rate
     double nativeFastestRate = -1;
     size_t anyAtRatePixels = 0;
 
@@ -435,8 +469,14 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
 
         size_t pw = CGDisplayModeGetPixelWidth(mode);
         size_t ph = CGDisplayModeGetPixelHeight(mode);
+        BOOL isNativeSize = haveNative && pw == nativeW && ph == nativeH;
 
-        if (haveNative && pw == nativeW && ph == nativeH) {
+        if (VDMDisplayModeIsVRR(displayID, mode)) {
+            if (isNativeSize && rateMatches && !nativeVRRAtRate) nativeVRRAtRate = mode;
+            continue;
+        }
+
+        if (isNativeSize) {
             if (rateMatches && !nativeAtRate) nativeAtRate = mode;
             // nativeFastestRate is seeded at -1, so a panel that reports 0 Hz
             // for its native timing still lands here rather than falling
@@ -456,9 +496,15 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     CGDisplayModeRef best = nativeAtRate;
     if (!best) best = nativeFastest;
     if (best && best != nativeAtRate) {
-        NSLog(@"VDM: Panel %u has no %.1f Hz mode at native %zux%zu — keeping native at %.1f Hz "
+        NSLog(@"VDM: Panel %u has no fixed %.1f Hz mode at native %zux%zu — keeping native at %.1f Hz "
               @"instead of dropping resolution", displayID, refreshRate, nativeW, nativeH,
               CGDisplayModeGetRefreshRate(best));
+    }
+    if (!best && nativeVRRAtRate) {
+        NSLog(@"VDM: WARN - Panel %u offers no fixed-rate mode at native %zux%zu, pinning the VRR "
+              @"mode at %.1f Hz (cursor may glitch — consider disabling Adaptive Sync)",
+              displayID, nativeW, nativeH, refreshRate);
+        best = nativeVRRAtRate;
     }
     if (!best && anyAtRate) {
         NSLog(@"VDM: WARN - Panel %u offers no native-size mode, falling back to largest mode at %.1f Hz",
@@ -469,6 +515,22 @@ static CGDisplayModeRef CopyBestModeAtRate(CGDirectDisplayID displayID, double r
     CGDisplayModeRef retained = best ? (CGDisplayModeRef)CGDisplayModeRetain(best) : NULL;
     CFRelease(modes);
     return retained;
+}
+
+/// Whether the panel currently advertises any variable-refresh modes, i.e.
+/// Adaptive Sync is enabled in the monitor's OSD. macOS handles mirroring onto
+/// such a panel differently (see mirrorDisplay:toDisplay:atRate:).
+static BOOL VDMDisplayHasVRRModes(CGDirectDisplayID displayID) {
+    CFArrayRef modes = VDMCopyDesktopModes(displayID);
+    if (!modes) return NO;
+    BOOL found = NO;
+    CFIndex count = CFArrayGetCount(modes);
+    for (CFIndex i = 0; i < count && !found; i++) {
+        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        found = VDMDisplayModeIsVRR(displayID, mode);
+    }
+    CFRelease(modes);
+    return found;
 }
 
 /// Put the target display back into `mode` after a failed mirror attempt so
@@ -510,6 +572,15 @@ static void VDMRestorePinnedMode(CGDirectDisplayID displayID, CGDisplayModeRef m
     // in one config block conflicts (the mirror call resets target mode and
     // rejects the whole config). Doing it first ensures the panel is in a
     // stable fixed scanout when the mirror call attaches it to the source.
+    //
+    // NOTE: on Adaptive Sync panels the mirror call still replaces this mode
+    // with a synthesized VRR mirror mode. That is repaired by a LATER re-pin
+    // (reassertFixedModeOnDisplay:atRate:) that the caller issues once the
+    // target has dropped out of the online display list — NOT here.
+    // Re-pinning while the target is still online (immediately or on a
+    // timer) aborts WindowServer's mirror transition halfway and leaves the
+    // hardware cursor drawn at the wrong scale and position (verified on a
+    // G95NC with Adaptive Sync on).
     if (refreshRate > 0) {
         CGDisplayModeRef pinMode = CopyBestModeAtRate(targetDisplayID, refreshRate);
         if (pinMode) {
@@ -572,16 +643,84 @@ static void VDMRestorePinnedMode(CGDirectDisplayID displayID, CGDisplayModeRef m
     // perceive the difference visually.
     CGDisplayModeRef actual = CGDisplayCopyDisplayMode(targetDisplayID);
     if (actual) {
-        NSLog(@"VDM: Mirror success — target %u now at %zux%zu @ %.1f Hz",
+        NSLog(@"VDM: Mirror success — target %u now at %zux%zu @ %.1f Hz (%@, mode %d, online=%d)",
               targetDisplayID,
               CGDisplayModeGetWidth(actual),
               CGDisplayModeGetHeight(actual),
-              CGDisplayModeGetRefreshRate(actual));
+              CGDisplayModeGetRefreshRate(actual),
+              VDMDisplayModeIsVRR(targetDisplayID, actual) ? @"VRR" : @"fixed",
+              CGDisplayModeGetIODisplayModeID(actual),
+              CGDisplayIsOnline(targetDisplayID));
         CGDisplayModeRelease(actual);
     } else {
         NSLog(@"VDM: Mirror success (could not read back target mode)");
     }
     return YES;
+}
+
+- (BOOL)displayHasAdaptiveSync:(CGDirectDisplayID)displayID {
+    return VDMDisplayHasVRRModes(displayID);
+}
+
+- (BOOL)reassertFixedModeOnDisplay:(CGDirectDisplayID)displayID atRate:(double)refreshRate {
+    CGDisplayModeRef pinMode = CopyBestModeAtRate(displayID, refreshRate);
+    if (!pinMode) {
+        NSLog(@"VDM: Re-pin: no fixed mode found on display %u at %.1f Hz", displayID, refreshRate);
+        return NO;
+    }
+
+    CGDisplayModeRef current = CGDisplayCopyDisplayMode(displayID);
+    BOOL alreadyPinned = current &&
+        CGDisplayModeGetIODisplayModeID(current) == CGDisplayModeGetIODisplayModeID(pinMode);
+    if (current) CGDisplayModeRelease(current);
+    if (alreadyPinned) {
+        // Steady-state no-op: the periodic backstop lands here every 30s
+        // while the deep mirror is pinned, so don't log.
+        CGDisplayModeRelease(pinMode);
+        return YES;
+    }
+
+    // Enforce the contract from the header: re-pinning while the target is
+    // still in the online list aborts the mirror transition halfway and
+    // leaves the cursor drawn at the wrong scale and position.
+    if (CGDisplayIsOnline(displayID)) {
+        NSLog(@"VDM: Re-pin: display %u is still online (mirror not settled) — refusing", displayID);
+        CGDisplayModeRelease(pinMode);
+        return NO;
+    }
+
+    NSLog(@"VDM: Re-pin: setting display %u to fixed mode %d (%zux%zu @ %.1f Hz)",
+          displayID, CGDisplayModeGetIODisplayModeID(pinMode),
+          CGDisplayModeGetWidth(pinMode), CGDisplayModeGetHeight(pinMode),
+          CGDisplayModeGetRefreshRate(pinMode));
+
+    BOOL ok = NO;
+    CGDisplayConfigRef config;
+    if (CGBeginDisplayConfiguration(&config) == kCGErrorSuccess) {
+        CGError e = CGConfigureDisplayWithDisplayMode(config, displayID, pinMode, NULL);
+        if (e == kCGErrorSuccess) {
+            e = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+            ok = (e == kCGErrorSuccess);
+            if (!ok) NSLog(@"VDM: WARN - Re-pin complete failed: %d", e);
+        } else {
+            NSLog(@"VDM: WARN - Re-pin configure failed: %d", e);
+            CGCancelDisplayConfiguration(config);
+        }
+    }
+    CGDisplayModeRelease(pinMode);
+
+    CGDisplayModeRef readback = CGDisplayCopyDisplayMode(displayID);
+    if (readback) {
+        NSLog(@"VDM: Re-pin result: display %u at %zux%zu @ %.1f Hz (%@, mode %d, online=%d)",
+              displayID,
+              CGDisplayModeGetWidth(readback), CGDisplayModeGetHeight(readback),
+              CGDisplayModeGetRefreshRate(readback),
+              VDMDisplayModeIsVRR(displayID, readback) ? @"VRR" : @"fixed",
+              CGDisplayModeGetIODisplayModeID(readback),
+              CGDisplayIsOnline(displayID));
+        CGDisplayModeRelease(readback);
+    }
+    return ok;
 }
 
 - (BOOL)stopMirroringForDisplay:(CGDirectDisplayID)displayID {
