@@ -663,6 +663,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isActive = false
     private var currentVirtualID: CGDirectDisplayID = 0
     private var targetExternalDisplayID: CGDirectDisplayID = 0  // Track which external display we're mirroring to
+    // Captured at mirror time, while the panel is still online and its mode
+    // list is readable. Both are unreadable once the deep mirror takes the
+    // target offline, so they must be remembered rather than re-queried.
+    private var boundPanelHasAdaptiveSync = false
+    private var boundPanelPinRate: Double = 0
 
     // State persistence keys
     private let kLastPresetKey = "lastActivePreset"
@@ -1067,7 +1072,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// No-op for panels without Adaptive Sync. Generation-guarded like every
     /// other delayed setup step.
     func scheduleAdaptiveSyncRepin(target: CGDirectDisplayID, rate: Double) {
-        guard VirtualDisplayManager.shared().displayHasAdaptiveSync(target) else { return }
+        boundPanelHasAdaptiveSync = VirtualDisplayManager.shared().displayHasAdaptiveSync(target)
+        boundPanelPinRate = rate
+        guard boundPanelHasAdaptiveSync else { return }
         debugLog("Adaptive Sync panel detected — waiting for the deep mirror to settle before re-pinning")
         pollAdaptiveSyncRepin(target: target, rate: rate, generation: setupGeneration, attempt: 1)
     }
@@ -1109,10 +1116,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard isActive, currentVirtualID != 0, targetExternalDisplayID != 0,
               CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID,
               !displayIsOnline(targetExternalDisplayID) else { return }
+        // Not manager.displayHasAdaptiveSync(): the target is offline here, so
+        // its mode list is unreadable and that query would always say NO.
+        guard boundPanelHasAdaptiveSync else { return }
         let manager = VirtualDisplayManager.shared()
-        guard manager.displayHasAdaptiveSync(targetExternalDisplayID) else { return }
-        _ = manager.reassertFixedMode(onDisplay: targetExternalDisplayID,
-                                      atRate: getDisplayRefreshRate(targetExternalDisplayID))
+        let rate = boundPanelPinRate > 0 ? boundPanelPinRate
+                                         : getDisplayRefreshRate(targetExternalDisplayID)
+        _ = manager.reassertFixedMode(onDisplay: targetExternalDisplayID, atRate: rate)
     }
 
     /// Re-apply the optional HDR and main-display preferences after the mirror
@@ -1252,7 +1262,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // the offline display, so check it before concluding the monitor was
         // unplugged — otherwise every display-change notification reads as a
         // disconnect and tears down a healthy setup.
-        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+        if boundPanelHasAdaptiveSync && currentVirtualID != 0 && targetExternalDisplayID != 0 &&
            CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
             if verbose {
                 debugLog("Monitor \(targetExternalDisplayID) is offline but still mirrors our virtual display (Adaptive Sync hardware mirror) — treating as connected")
@@ -2527,7 +2537,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Same Adaptive Sync fallback as findRealPhysicalMonitor: the active
         // hardware-mirror target is offline (not enumerated) but still ours.
-        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+        if boundPanelHasAdaptiveSync && currentVirtualID != 0 && targetExternalDisplayID != 0 &&
            CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
             debugLog("  -> Mirror target \(targetExternalDisplayID) offline but mirror intact (Adaptive Sync) — using it")
             return targetExternalDisplayID
@@ -2572,7 +2582,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // An offline-but-mirrored target (Adaptive Sync hardware mirror) can't
         // be fingerprinted from the online list, but it IS the monitor the
         // preset was applied to — we set the mirror up on it.
-        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+        if boundPanelHasAdaptiveSync && currentVirtualID != 0 && targetExternalDisplayID != 0 &&
            CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
             return true
         }
