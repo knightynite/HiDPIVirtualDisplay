@@ -116,6 +116,7 @@ cd /path/to/HiDPIVirtualDisplay/App
 - Refresh rate is auto-detected; if your monitor flickers, set it manually under Settings > Refresh Rate
 - Since 1.2.6, resolution wins over refresh rate. If your cable or port can't carry the panel's native resolution at the rate you picked, the app uses the fastest rate that *does* run at native instead of shrinking the desktop. Bandwidth-limited HDMI links hit this most often
 - Mirroring resamples unless the preset's framebuffer matches the panel exactly. On a 7680x2160 panel only the 3840x1080 (2.0x) preset is a 1:1 mirror; every other preset trades a little sharpness for smaller text
+- Monitor brightness can't be controlled from macOS on the 57" G9, and this app can't change that. The panel never answers DDC/CI through Apple's display path (EDID reads back fine, but every VCP code returns empty, and writes are ignored), so DisplayBuddy, MonitorControl, Lunar and m1ddc all fail the same way — they share the same private API. Use the monitor's OSD. The same panel does respond to DDC on Linux via `ddcutil`, so this is a macOS-side limitation
 
 ## Troubleshooting
 
@@ -128,6 +129,8 @@ cd /path/to/HiDPIVirtualDisplay/App
 **Flickering** — go to Settings > Refresh Rate and manually match your monitor (common with 165Hz/240Hz displays).
 
 **Picture looks soft, or lower resolution than it should** — check `/tmp/g9helper.log` for the `Panel N: native ...` line. It prints the panel's native size and which refresh rates that panel actually offers at that size. If the rate you want isn't listed there, the link can't carry it at full resolution: try a different port or cable, or drop the rate. To rule out the mirror resample entirely, switch to the 3840x1080 (2.0x) preset, which mirrors 1:1 on a 7680x2160 panel.
+
+**Brightness / DDC tools can't see the monitor** — while a virtual display is active, utilities like m1ddc, MonitorControl and DisplayBuddy may not list the panel at all (`m1ddc display list` comes back empty). Quit G9 Helper and it shows up again. Brightness still won't work on the 57" G9 either way; see the note above. If brightness seems to drift on its own, turn off Eco Saving Plus in the OSD; the panel's adaptive backlight moves with screen content.
 
 ## How it works
 
