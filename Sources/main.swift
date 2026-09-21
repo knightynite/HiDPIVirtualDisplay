@@ -39,20 +39,57 @@ struct DisplayPreset {
     }
 }
 
-// Samsung G9 57" (7680x2160) presets
-let g9Presets: [DisplayPreset] = [
+// Built-in presets
+let presets: [DisplayPreset] = [
+    // Samsung G9 57" (7680x2160 native) - Fractional scaling options
     DisplayPreset(
-        name: "g9-native-hidpi",
-        description: "Native 2x HiDPI (looks like 3840x1080)",
-        framebufferWidth: 7680,
-        framebufferHeight: 2160,
-        logicalWidth: 3840,
-        logicalHeight: 1080,
+        name: "g9-57-6144x1728",
+        description: "Samsung G9 57\" HiDPI (looks like 6144x1728) - 1.25x more space",
+        framebufferWidth: 12288,
+        framebufferHeight: 3456,
+        logicalWidth: 6144,
+        logicalHeight: 1728,
         ppi: 140
     ),
     DisplayPreset(
-        name: "g9-5120x1440",
-        description: "Scaled HiDPI (looks like 5120x1440) - Good balance",
+        name: "g9-57-5908x1662",
+        description: "Samsung G9 57\" HiDPI (looks like 5908x1662) - 1.3x",
+        framebufferWidth: 11816,
+        framebufferHeight: 3324,
+        logicalWidth: 5908,
+        logicalHeight: 1662,
+        ppi: 140
+    ),
+    DisplayPreset(
+        name: "g9-57-5632x1584",
+        description: "Samsung G9 57\" HiDPI (looks like 5632x1584) - 1.36x",
+        framebufferWidth: 11264,
+        framebufferHeight: 3168,
+        logicalWidth: 5632,
+        logicalHeight: 1584,
+        ppi: 140
+    ),
+    DisplayPreset(
+        name: "g9-57-5486x1543",
+        description: "Samsung G9 57\" HiDPI (looks like 5486x1543) - 1.4x",
+        framebufferWidth: 10972,
+        framebufferHeight: 3086,
+        logicalWidth: 5486,
+        logicalHeight: 1543,
+        ppi: 140
+    ),
+    DisplayPreset(
+        name: "g9-57-5297x1490",
+        description: "Samsung G9 57\" HiDPI (looks like 5297x1490) - 1.45x",
+        framebufferWidth: 10594,
+        framebufferHeight: 2980,
+        logicalWidth: 5297,
+        logicalHeight: 1490,
+        ppi: 140
+    ),
+    DisplayPreset(
+        name: "g9-57-5120x1440",
+        description: "Samsung G9 57\" HiDPI (looks like 5120x1440) - 1.5x recommended",
         framebufferWidth: 10240,
         framebufferHeight: 2880,
         logicalWidth: 5120,
@@ -60,8 +97,8 @@ let g9Presets: [DisplayPreset] = [
         ppi: 140
     ),
     DisplayPreset(
-        name: "g9-4800x1350",
-        description: "Scaled HiDPI (looks like 4800x1350)",
+        name: "g9-57-4800x1350",
+        description: "Samsung G9 57\" HiDPI (looks like 4800x1350) - 1.6x",
         framebufferWidth: 9600,
         framebufferHeight: 2700,
         logicalWidth: 4800,
@@ -69,27 +106,222 @@ let g9Presets: [DisplayPreset] = [
         ppi: 140
     ),
     DisplayPreset(
-        name: "g9-4480x1260",
-        description: "Scaled HiDPI (looks like 4480x1260) - Larger UI",
-        framebufferWidth: 8960,
-        framebufferHeight: 2520,
-        logicalWidth: 4480,
-        logicalHeight: 1260,
+        name: "g9-57-4389x1234",
+        description: "Samsung G9 57\" HiDPI (looks like 4389x1234) - 1.75x",
+        framebufferWidth: 8778,
+        framebufferHeight: 2468,
+        logicalWidth: 4389,
+        logicalHeight: 1234,
         ppi: 140
     ),
     DisplayPreset(
-        name: "g9-3840x1080-lodpi",
-        description: "LoDPI at half resolution (no scaling, sharp)",
-        framebufferWidth: 3840,
-        framebufferHeight: 1080,
+        name: "g9-57-3840x1080",
+        description: "Samsung G9 57\" native 2x HiDPI (looks like 3840x1080)",
+        framebufferWidth: 7680,
+        framebufferHeight: 2160,
         logicalWidth: 3840,
         logicalHeight: 1080,
         ppi: 140
-    )
-]
+    ),
 
-// Generic presets for other monitors
-let genericPresets: [DisplayPreset] = [
+    // Samsung G9 49" (5120x1440 native) - Fractional scaling options
+    DisplayPreset(
+        name: "g9-49-4096x1152",
+        description: "Samsung G9 49\" HiDPI (looks like 4096x1152) - 1.25x more space",
+        framebufferWidth: 8192,
+        framebufferHeight: 2304,
+        logicalWidth: 4096,
+        logicalHeight: 1152,
+        ppi: 109
+    ),
+    DisplayPreset(
+        name: "g9-49-3938x1108",
+        description: "Samsung G9 49\" HiDPI (looks like 3938x1108) - 1.3x",
+        framebufferWidth: 7876,
+        framebufferHeight: 2216,
+        logicalWidth: 3938,
+        logicalHeight: 1108,
+        ppi: 109
+    ),
+    DisplayPreset(
+        name: "g9-49-3840x1080",
+        description: "Samsung G9 49\" HiDPI (looks like 3840x1080) - 1.33x recommended",
+        framebufferWidth: 7680,
+        framebufferHeight: 2160,
+        logicalWidth: 3840,
+        logicalHeight: 1080,
+        ppi: 109
+    ),
+    DisplayPreset(
+        name: "g9-49-3413x960",
+        description: "Samsung G9 49\" HiDPI (looks like 3413x960) - 1.5x",
+        framebufferWidth: 6826,
+        framebufferHeight: 1920,
+        logicalWidth: 3413,
+        logicalHeight: 960,
+        ppi: 109
+    ),
+    DisplayPreset(
+        name: "g9-49-2926x823",
+        description: "Samsung G9 49\" HiDPI (looks like 2926x823) - 1.75x",
+        framebufferWidth: 5852,
+        framebufferHeight: 1646,
+        logicalWidth: 2926,
+        logicalHeight: 823,
+        ppi: 109
+    ),
+    DisplayPreset(
+        name: "g9-49-2560x720",
+        description: "Samsung G9 49\" native 2x HiDPI (looks like 2560x720)",
+        framebufferWidth: 5120,
+        framebufferHeight: 1440,
+        logicalWidth: 2560,
+        logicalHeight: 720,
+        ppi: 109
+    ),
+
+    // 34" Ultrawide (3440x1440 native) - Fractional scaling options
+    DisplayPreset(
+        name: "uw34-2752x1152",
+        description: "34\" ultrawide HiDPI (looks like 2752x1152) - 1.25x more space",
+        framebufferWidth: 5504,
+        framebufferHeight: 2304,
+        logicalWidth: 2752,
+        logicalHeight: 1152,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw34-2646x1108",
+        description: "34\" ultrawide HiDPI (looks like 2646x1108) - 1.3x",
+        framebufferWidth: 5292,
+        framebufferHeight: 2216,
+        logicalWidth: 2646,
+        logicalHeight: 1108,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw34-2293x960",
+        description: "34\" ultrawide HiDPI (looks like 2293x960) - 1.5x recommended",
+        framebufferWidth: 4586,
+        framebufferHeight: 1920,
+        logicalWidth: 2293,
+        logicalHeight: 960,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw34-1966x823",
+        description: "34\" ultrawide HiDPI (looks like 1966x823) - 1.75x",
+        framebufferWidth: 3932,
+        framebufferHeight: 1646,
+        logicalWidth: 1966,
+        logicalHeight: 823,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw34-1720x720",
+        description: "34\" ultrawide native 2x HiDPI (looks like 1720x720)",
+        framebufferWidth: 3440,
+        framebufferHeight: 1440,
+        logicalWidth: 1720,
+        logicalHeight: 720,
+        ppi: 110
+    ),
+
+    // 38" Ultrawide (3840x1600 native) - Fractional scaling options
+    DisplayPreset(
+        name: "uw38-3072x1280",
+        description: "38\" ultrawide HiDPI (looks like 3072x1280) - 1.25x more space",
+        framebufferWidth: 6144,
+        framebufferHeight: 2560,
+        logicalWidth: 3072,
+        logicalHeight: 1280,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw38-2954x1231",
+        description: "38\" ultrawide HiDPI (looks like 2954x1231) - 1.3x",
+        framebufferWidth: 5908,
+        framebufferHeight: 2462,
+        logicalWidth: 2954,
+        logicalHeight: 1231,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw38-2560x1067",
+        description: "38\" ultrawide HiDPI (looks like 2560x1067) - 1.5x recommended",
+        framebufferWidth: 5120,
+        framebufferHeight: 2134,
+        logicalWidth: 2560,
+        logicalHeight: 1067,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw38-2194x914",
+        description: "38\" ultrawide HiDPI (looks like 2194x914) - 1.75x",
+        framebufferWidth: 4388,
+        framebufferHeight: 1828,
+        logicalWidth: 2194,
+        logicalHeight: 914,
+        ppi: 110
+    ),
+    DisplayPreset(
+        name: "uw38-1920x800",
+        description: "38\" ultrawide native 2x HiDPI (looks like 1920x800)",
+        framebufferWidth: 3840,
+        framebufferHeight: 1600,
+        logicalWidth: 1920,
+        logicalHeight: 800,
+        ppi: 110
+    ),
+
+    // 4K (3840x2160 native) - Fractional scaling options
+    DisplayPreset(
+        name: "4k-3072x1728",
+        description: "4K HiDPI (looks like 3072x1728) - 1.25x more space",
+        framebufferWidth: 6144,
+        framebufferHeight: 3456,
+        logicalWidth: 3072,
+        logicalHeight: 1728,
+        ppi: 163
+    ),
+    DisplayPreset(
+        name: "4k-2954x1662",
+        description: "4K HiDPI (looks like 2954x1662) - 1.3x",
+        framebufferWidth: 5908,
+        framebufferHeight: 3324,
+        logicalWidth: 2954,
+        logicalHeight: 1662,
+        ppi: 163
+    ),
+    DisplayPreset(
+        name: "4k-2560x1440",
+        description: "4K HiDPI (looks like 2560x1440) - 1.5x recommended",
+        framebufferWidth: 5120,
+        framebufferHeight: 2880,
+        logicalWidth: 2560,
+        logicalHeight: 1440,
+        ppi: 163
+    ),
+    DisplayPreset(
+        name: "4k-2194x1234",
+        description: "4K HiDPI (looks like 2194x1234) - 1.75x",
+        framebufferWidth: 4388,
+        framebufferHeight: 2468,
+        logicalWidth: 2194,
+        logicalHeight: 1234,
+        ppi: 163
+    ),
+    DisplayPreset(
+        name: "4k-1920x1080",
+        description: "4K native 2x HiDPI (looks like 1920x1080)",
+        framebufferWidth: 3840,
+        framebufferHeight: 2160,
+        logicalWidth: 1920,
+        logicalHeight: 1080,
+        ppi: 163
+    ),
+
+    // Legacy CLI aliases
     DisplayPreset(
         name: "4k-hidpi",
         description: "4K HiDPI (looks like 1920x1080)",
@@ -178,10 +410,10 @@ func printUsage() {
         # Custom: Create 6K virtual for ultrawide
         hidpi-virtual-display create-custom 6144 1728 140 true "Custom 6K"
 
-    \(colorize("G9 57\" PRESETS:", .yellow))
+    \(colorize("PRESETS:", .yellow))
     """)
 
-    for preset in g9Presets {
+    for preset in presets {
         let hiDPIStr = preset.isHiDPI ? colorize("[HiDPI]", .green) : colorize("[LoDPI]", .yellow)
         print("        \(colorize(preset.name, .cyan))")
         print("            \(preset.description)")
@@ -238,10 +470,7 @@ func printDisplayList() {
 }
 
 func printPresets() {
-    print(colorize("\nG9 57\" Presets (7680x2160 native):", .bold))
-    print(String(repeating: "-", count: 60))
-
-    for preset in g9Presets {
+    func printPreset(_ preset: DisplayPreset) {
         let hiDPIStr = preset.isHiDPI ? colorize("HiDPI", .green) : colorize("LoDPI", .yellow)
         print("\(colorize(preset.name, .cyan))")
         print("    \(preset.description)")
@@ -250,22 +479,28 @@ func printPresets() {
         print()
     }
 
-    print(colorize("\nGeneric Presets:", .bold))
-    print(String(repeating: "-", count: 60))
+    func printPresetSection(_ title: String, presets: [DisplayPreset]) {
+        guard !presets.isEmpty else { return }
 
-    for preset in genericPresets {
-        let hiDPIStr = preset.isHiDPI ? colorize("HiDPI", .green) : colorize("LoDPI", .yellow)
-        print("\(colorize(preset.name, .cyan))")
-        print("    \(preset.description)")
-        print("    Framebuffer: \(preset.framebufferWidth)x\(preset.framebufferHeight) [\(hiDPIStr)]")
-        print()
+        print(colorize("\n\(title):", .bold))
+        print(String(repeating: "-", count: 60))
+
+        for preset in presets {
+            printPreset(preset)
+        }
     }
+
+    printPresetSection("Samsung G9 57\" Presets (7680x2160 native)", presets: presets.filter { $0.name.hasPrefix("g9-57-") })
+    printPresetSection("Samsung G9 49\" Presets (5120x1440 native)", presets: presets.filter { $0.name.hasPrefix("g9-49-") })
+    printPresetSection("34\" Ultrawide Presets (3440x1440 native)", presets: presets.filter { $0.name.hasPrefix("uw34-") })
+    printPresetSection("38\" Ultrawide Presets (3840x1600 native)", presets: presets.filter { $0.name.hasPrefix("uw38-") })
+    printPresetSection("4K Presets (3840x2160 native)", presets: presets.filter { $0.name.hasPrefix("4k-") && !$0.name.hasSuffix("-hidpi") })
+    printPresetSection("Other Legacy CLI Aliases", presets: presets.filter { $0.name.hasSuffix("-hidpi") })
 }
 
 func createFromPreset(_ presetName: String) -> CGDirectDisplayID {
-    let allPresets = g9Presets + genericPresets
 
-    guard let preset = allPresets.first(where: { $0.name == presetName }) else {
+    guard let preset = presets.first(where: { $0.name == presetName }) else {
         print(colorize("Error: Unknown preset '\(presetName)'", .red))
         print("Use 'presets' command to see available presets")
         return CGDirectDisplayID(kCGNullDirectDisplay)
