@@ -25,6 +25,15 @@ func debugLog(_ message: String) {
     }
 }
 
+func isOurVirtualDisplay(_ displayID: CGDirectDisplayID) -> Bool {
+    let vendor = CGDisplayVendorNumber(displayID)
+    let model = CGDisplayModelNumber(displayID)
+    let serial = CGDisplaySerialNumber(displayID)
+    if vendor == 0x1234 { return true }
+    if vendor == 0x0610 && model == 0x0F93 && CGDisplayIsBuiltin(displayID) == 0 { return true }
+    return serial == 0x4731 || (serial >= 0x4860 && serial <= 0x4880)
+}
+
 // MARK: - Launch Agent Manager
 
 class LaunchAgentManager {
@@ -682,8 +691,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kBoundMonitorSerialKey = "boundMonitorSerial"
     private let kSavedDisplayArrangementsKey = "savedDisplayArrangements"
     private let kSavedMainDisplayFingerprintKey = "savedMainDisplayFingerprint"
+    private let kEnableNotchMenuBarKey = "enableNotchMenuBar"
     private var saveArrangementTimer: Timer?
     private var suppressArrangementSaveUntil: Date = .distantPast
+    private var wasTargetMain = false
 
     func suppressArrangementSaving(for seconds: TimeInterval = 4.0) {
         suppressArrangementSaveUntil = Date().addingTimeInterval(seconds)
@@ -767,6 +778,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "display", accessibilityDescription: "HiDPI Display")
         }
+
+        if UserDefaults.standard.object(forKey: kEnableNotchMenuBarKey) == nil && UserDefaults.standard.object(forKey: "enableWideMenuBar") != nil {
+            UserDefaults.standard.set(UserDefaults.standard.bool(forKey: "enableWideMenuBar"), forKey: kEnableNotchMenuBarKey)
+        }
+        VirtualDisplayManager.shared().notchMenuBarEnabled = UserDefaults.standard.bool(forKey: kEnableNotchMenuBarKey)
 
         // Restore wasDisconnected state from UserDefaults (persists across restart)
         wasDisconnected = UserDefaults.standard.bool(forKey: kWasDisconnectedKey)
@@ -1249,7 +1265,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let vendorID = CGDisplayVendorNumber(displayID)
 
             // Our virtual displays use vendor ID 0x1234 or subtype 1665
-            let isVirtualDisplay = vendorID == 0x1234
+            let isVirtualDisplay = isOurVirtualDisplay(displayID)
 
             // Vendor 0x756E6B6E (1970170734) = "unkn" in ASCII — macOS placeholder for
             // displays whose EDID hasn't been read yet. These are ghost/phantom displays
@@ -1306,8 +1322,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             // Skip the display we currently own — it's not orphaned
             if currentVirtualID != 0 && displayID == currentVirtualID { continue }
-            let vendorID = CGDisplayVendorNumber(displayID)
-            if vendorID == 0x1234 {
+            if isOurVirtualDisplay(displayID) {
                 debugLog("Found orphaned virtual display: \(displayID)")
                 return true
             }
@@ -1664,7 +1679,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let mirrorOf = CGDisplayMirrorsDisplay(displayID)
             if mirrorOf != kCGNullDirectDisplay {
                 // Only claim mirror sets whose master is one of our virtual displays
-                guard CGDisplayVendorNumber(mirrorOf) == 0x1234 else { continue }
+                guard isOurVirtualDisplay(mirrorOf) else { continue }
                 if let mode = CGDisplayCopyDisplayMode(mirrorOf) {
                     let width = mode.width
                     let height = mode.height
@@ -1807,6 +1822,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         keepPrimaryItem.state = UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey) ? .on : .off
         settingsMenu.addItem(keepPrimaryItem)
 
+        let notchMenuItem = NSMenuItem(title: "notch menu bar", action: #selector(toggleNotchMenuBar(_:)), keyEquivalent: "")
+        notchMenuItem.target = self
+        notchMenuItem.state = UserDefaults.standard.bool(forKey: kEnableNotchMenuBarKey) ? .on : .off
+        settingsMenu.addItem(notchMenuItem)
+
         let autoUpdateItem = NSMenuItem(title: "Check for Updates Automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
         autoUpdateItem.target = self
         autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
@@ -1928,6 +1948,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc func toggleNotchMenuBar(_ sender: NSMenuItem) {
+        let current = UserDefaults.standard.bool(forKey: kEnableNotchMenuBarKey)
+        let newValue = !current
+        UserDefaults.standard.set(newValue, forKey: kEnableNotchMenuBarKey)
+        VirtualDisplayManager.shared().notchMenuBarEnabled = newValue
+        sender.state = newValue ? .on : .off
+        debugLog("notch menu bar set to: \(newValue)")
+
+        if isActive || hasOrphanedVirtualDisplay() {
+            debugLog("Active display present, relaunching to apply notch menu bar setting...")
+            saveCurrentDisplayArrangement(force: true)
+            isRestarting = true
+            StatusWindowController.shared.show(message: "Applying notch menu bar setting...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                relaunchApp()
+            }
+            return
+        }
+        rebuildMenu()
+    }
+
     /// Apply the "Keep HDR On (Beta)" preference to the current physical mirror
     /// target. Enabling HDR re-applies the panel state macOS otherwise resets on
     /// login; disabling turns it back off. No-op when no mirror target is active
@@ -2010,7 +2051,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay { continue }
 
             let vendor = CGDisplayVendorNumber(id)
-            if vendor == 0x1234 || vendor == 0x756E6B6E { continue }
+            if isOurVirtualDisplay(id) || vendor == 0x756E6B6E { continue }
 
             let bounds = CGDisplayBounds(id)
             guard bounds.width > 0 && bounds.height > 0 else { continue }
@@ -2091,7 +2132,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay { continue }
 
             let vendor = CGDisplayVendorNumber(id)
-            if vendor == 0x1234 || vendor == 0x756E6B6E { continue }
+            if isOurVirtualDisplay(id) || vendor == 0x756E6B6E { continue }
 
             let bounds = CGDisplayBounds(id)
             let curSecW = Int(bounds.width)
@@ -2177,7 +2218,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // If user didn't request anchor as main display, and target wasn't main when activated,
         // and saved main display is one of the secondary monitors (e.g. laptop panel):
-        if !keepPrimary,
+        if !keepPrimary && !wasTargetMain,
            let targetMainFp = savedMainFingerprint, targetMainFp != "anchor" {
             if let mainSec = displaysToConfigure.first(where: { displayFingerprint($0.id) == targetMainFp }) {
                 shiftX = -mainSec.targetX
@@ -2634,7 +2675,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             rebuildMenu()
             return
         }
-        debugLog("Using external display: \(externalID)")
+        let currentMain = CGMainDisplayID()
+        self.wasTargetMain = (currentMain == externalID || (self.targetExternalDisplayID != 0 && currentMain == self.targetExternalDisplayID))
+        debugLog("Using external display: \(externalID), wasTargetMain=\(self.wasTargetMain)")
         logPanelModeSummary(externalID)
 
         StatusWindowController.shared.updateStatus("Creating virtual display...")
@@ -2708,7 +2751,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
 
-            if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
+            if self.wasTargetMain || UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
                 _ = self.setMainDisplay(virtualID)
             }
 
@@ -2820,7 +2863,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let vendorID = CGDisplayVendorNumber(displayID)
-            let isVirtualDisplay = vendorID == 0x1234
+            let isVirtualDisplay = isOurVirtualDisplay(displayID)
             let isGhostDisplay = vendorID == 0x756E6B6E  // "unkn" — phantom display without EDID
 
             // Skip builtin, virtual, and ghost/phantom displays
@@ -2931,7 +2974,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             let vendorID = CGDisplayVendorNumber(displayID)
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
-            let isVirtualDisplay = vendorID == 0x1234
+            let isVirtualDisplay = isOurVirtualDisplay(displayID)
             let isGhostDisplay = vendorID == 0x756E6B6E
             if isBuiltin || isVirtualDisplay || isGhostDisplay { continue }
             if displayMatchesSavedFingerprint(displayID) {

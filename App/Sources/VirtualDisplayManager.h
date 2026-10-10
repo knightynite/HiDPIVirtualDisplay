@@ -32,6 +32,9 @@ BOOL VDMDisplayModeIsVRR(CGDirectDisplayID displayID, CGDisplayModeRef _Nullable
 /// Currently active virtual display ID (or kCGNullDirectDisplay if none)
 @property (nonatomic, readonly) CGDirectDisplayID currentDisplayID;
 
+/// Whether to create virtual displays with a MacBook notch menu bar (subtype 1665)
+@property (nonatomic, assign) BOOL notchMenuBarEnabled;
+
 /// Create a virtual display with specified parameters
 /// @param width Width in pixels
 /// @param height Height in pixels
