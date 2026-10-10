@@ -681,7 +681,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let kBoundMonitorModelKey = "boundMonitorModel"
     private let kBoundMonitorSerialKey = "boundMonitorSerial"
     private let kSavedDisplayArrangementsKey = "savedDisplayArrangements"
+    private let kSavedMainDisplayFingerprintKey = "savedMainDisplayFingerprint"
     private var saveArrangementTimer: Timer?
+    private var suppressArrangementSaveUntil: Date = .distantPast
+
+    func suppressArrangementSaving(for seconds: TimeInterval = 4.0) {
+        suppressArrangementSaveUntil = Date().addingTimeInterval(seconds)
+    }
 
     // Track if we're waiting for monitor reconnection
     private var wasDisconnected = false
@@ -1131,13 +1137,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// is (re)established. Shared by first apply, wake restore, and transient
     /// dropout recovery.
     func reassertPreferencesAfterSetup() {
+        let generation = setupGeneration
         if UserDefaults.standard.bool(forKey: kKeepHDREnabledKey) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.applyHDRPreference()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self = self, generation == self.setupGeneration else { return }
+                self.applyHDRPreference()
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, generation == self.setupGeneration else { return }
             if self.restoreDisplayArrangement() {
                 debugLog("Arrangement: restored successfully after setup")
             } else if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
@@ -1147,7 +1155,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             debugLog("HiDPI setup and arrangement restore fully settled")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, generation == self.setupGeneration else { return }
             _ = self.restoreDisplayArrangement()
         }
     }
@@ -1240,7 +1248,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let vendorID = CGDisplayVendorNumber(displayID)
 
-            // Our virtual displays use vendor ID 0x1234 (4660 decimal)
+            // Our virtual displays use vendor ID 0x1234 or subtype 1665
             let isVirtualDisplay = vendorID == 0x1234
 
             // Vendor 0x756E6B6E (1970170734) = "unkn" in ASCII — macOS placeholder for
@@ -1299,7 +1307,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Skip the display we currently own — it's not orphaned
             if currentVirtualID != 0 && displayID == currentVirtualID { continue }
             let vendorID = CGDisplayVendorNumber(displayID)
-            // Our virtual displays use vendor ID 0x1234 (4660 decimal)
             if vendorID == 0x1234 {
                 debugLog("Found orphaned virtual display: \(displayID)")
                 return true
@@ -1369,6 +1376,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             debugLog("Disconnect cleanup already in progress, ignoring")
             return
         }
+        saveCurrentDisplayArrangement(force: true)
         isRestarting = true
         debugLog(">>> Starting disconnect cleanup")
 
@@ -1449,7 +1457,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupGeneration += 1  // Cancel any in-flight setup steps
         isSettingUp = false   // A cancelled setup step won't clear this itself
 
-        saveCurrentDisplayArrangement()
+        saveCurrentDisplayArrangement(force: true)
 
         let manager = VirtualDisplayManager.shared()
 
@@ -1655,10 +1663,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             let mirrorOf = CGDisplayMirrorsDisplay(displayID)
             if mirrorOf != kCGNullDirectDisplay {
-                // Only claim mirror sets whose master is one of our virtual
-                // displays (vendor 0x1234) — a mirror the user configured
-                // between two of their own displays isn't ours and must not
-                // flip the app to "active".
+                // Only claim mirror sets whose master is one of our virtual displays
                 guard CGDisplayVendorNumber(mirrorOf) == 0x1234 else { continue }
                 if let mode = CGDisplayCopyDisplayMode(mirrorOf) {
                     let width = mode.width
@@ -1958,8 +1963,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Save the relative position of all secondary displays relative to the primary/anchor display.
     /// This allows restoring the multi-monitor layout after virtual displays are recreated.
-    func saveCurrentDisplayArrangement() {
-        guard !isSettingUp && !isRestarting else { return }
+    /// Save the relative position of all secondary displays relative to the primary/anchor display.
+    /// This allows restoring the multi-monitor layout after virtual displays are recreated.
+    func saveCurrentDisplayArrangement(force: Bool = false) {
+        if !force {
+            guard !isSettingUp && !isRestarting else { return }
+            guard Date() >= suppressArrangementSaveUntil else {
+                debugLog("Arrangement: save suppressed during app configuration transition")
+                return
+            }
+        }
 
         let anchorID: CGDirectDisplayID
         if isActive && currentVirtualID != 0 {
@@ -1976,6 +1989,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
         var displayCount: UInt32 = 0
         guard CGGetOnlineDisplayList(32, &displayList, &displayCount) == .success else { return }
+
+        // Track which display is currently the main display
+        let currentMainID = CGMainDisplayID()
+        let mainFingerprint: String
+        if currentMainID == anchorID || CGDisplayMirrorsDisplay(currentMainID) == anchorID {
+            mainFingerprint = "anchor"
+        } else {
+            mainFingerprint = displayFingerprint(currentMainID)
+        }
+        UserDefaults.standard.set(mainFingerprint, forKey: kSavedMainDisplayFingerprintKey)
 
         var savedDict = UserDefaults.standard.dictionary(forKey: kSavedDisplayArrangementsKey) as? [String: [String: Int]] ?? [:]
         var savedCount = 0
@@ -1996,15 +2019,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let relY = Int(bounds.origin.y - anchorBounds.origin.y)
             let key = displayFingerprint(id)
 
-            // If we already have a saved custom arrangement (e.g. monitor above/below with relY != 0),
-            // do not overwrite it if macOS is temporarily showing the default side-by-side layout (relY == 0).
-            if let existing = savedDict[key],
-               let existingY = existing["relY"], existingY != 0,
-               relY == 0 {
-                debugLog("Arrangement: skipping overwrite of vertical arrangement \(existingY) with default side-by-side (0)")
-                continue
-            }
-
             savedDict[key] = [
                 "relX": relX,
                 "relY": relY,
@@ -2014,12 +2028,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 "anchorHeight": Int(anchorBounds.height)
             ]
             savedCount += 1
-            debugLog("Arrangement: saved relative position for monitor \(key): (\(relX), \(relY))")
+            debugLog("Arrangement: saved relative position for monitor \(key): (\(relX), \(relY)), anchorSize=(\(Int(anchorBounds.width))x\(Int(anchorBounds.height)))")
         }
 
         if savedCount > 0 {
             UserDefaults.standard.set(savedDict, forKey: kSavedDisplayArrangementsKey)
-            debugLog("Arrangement: saved \(savedCount) secondary monitor position(s)")
+            debugLog("Arrangement: saved \(savedCount) secondary monitor position(s), main=\(mainFingerprint)")
         }
     }
 
@@ -2049,7 +2063,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var displayCount: UInt32 = 0
         guard CGGetOnlineDisplayList(32, &displayList, &displayCount) == .success else { return false }
 
+        // Prune stale display fingerprints from saved dictionary
+        let onlineFingerprints = Set((0..<Int(displayCount)).map { displayFingerprint(displayList[$0]) })
+        var prunedDict = savedDict
+        var hasPruned = false
+        for key in savedDict.keys {
+            if !onlineFingerprints.contains(key) {
+                prunedDict.removeValue(forKey: key)
+                hasPruned = true
+                debugLog("Arrangement: pruned stale display fingerprint \(key)")
+            }
+        }
+        if hasPruned {
+            UserDefaults.standard.set(prunedDict, forKey: kSavedDisplayArrangementsKey)
+        }
+
         let currentAnchorBounds = CGDisplayBounds(anchorID)
+        let curAnchorW = Int(currentAnchorBounds.width)
+        let curAnchorH = Int(currentAnchorBounds.height)
         var displaysToConfigure: [(id: CGDirectDisplayID, targetX: Int32, targetY: Int32)] = []
         var foundAnySaved = false
 
@@ -2062,16 +2093,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let vendor = CGDisplayVendorNumber(id)
             if vendor == 0x1234 || vendor == 0x756E6B6E { continue }
 
+            let bounds = CGDisplayBounds(id)
+            let curSecW = Int(bounds.width)
+            let curSecH = Int(bounds.height)
             let key = displayFingerprint(id)
-            if let saved = savedDict[key],
-               let relX = saved["relX"],
-               let relY = saved["relY"] {
-                displaysToConfigure.append((id: id, targetX: Int32(relX), targetY: Int32(relY)))
+
+            var targetX: Int32
+            var targetY: Int32
+
+            if let saved = prunedDict[key],
+               let rawRelX = saved["relX"],
+               let rawRelY = saved["relY"] {
+                let savedSecW = saved["width"] ?? curSecW
+                let savedSecH = saved["height"] ?? curSecH
+                let savedAnchorW = saved["anchorWidth"] ?? curAnchorW
+                let savedAnchorH = saved["anchorHeight"] ?? curAnchorH
+
+                // Adapt X offset if anchor width changed
+                if curAnchorW == savedAnchorW {
+                    targetX = Int32(rawRelX)
+                } else if rawRelX >= savedAnchorW {
+                    // Attached to right edge: maintain distance from right edge
+                    targetX = Int32(curAnchorW + (rawRelX - savedAnchorW))
+                } else if rawRelX + savedSecW <= 0 {
+                    // Attached to left edge: maintain distance from left edge
+                    targetX = Int32(rawRelX)
+                } else {
+                    // Overlapping or centered horizontally
+                    if abs(rawRelX) < 10 {
+                        targetX = 0
+                    } else if abs((rawRelX + savedSecW) - savedAnchorW) < 10 {
+                        targetX = Int32(curAnchorW - savedSecW)
+                    } else if abs((rawRelX + savedSecW / 2) - (savedAnchorW / 2)) < 15 {
+                        targetX = Int32((curAnchorW - savedSecW) / 2)
+                    } else {
+                        let centerRatio = (Double(rawRelX) + Double(savedSecW) / 2.0) / Double(max(1, savedAnchorW))
+                        targetX = Int32(round(centerRatio * Double(curAnchorW) - Double(savedSecW) / 2.0))
+                    }
+                }
+
+                // Adapt Y offset if anchor height changed
+                if curAnchorH == savedAnchorH {
+                    targetY = Int32(rawRelY)
+                } else if rawRelY >= savedAnchorH {
+                    // Attached to bottom edge: maintain distance from bottom edge
+                    targetY = Int32(curAnchorH + (rawRelY - savedAnchorH))
+                } else if rawRelY + savedSecH <= 0 {
+                    // Attached to top edge: maintain distance from top edge
+                    targetY = Int32(rawRelY)
+                } else {
+                    // Overlapping or centered vertically
+                    if abs(rawRelY) < 10 {
+                        targetY = 0
+                    } else if abs((rawRelY + savedSecH) - savedAnchorH) < 10 {
+                        targetY = Int32(curAnchorH - savedSecH)
+                    } else if abs((rawRelY + savedSecH / 2) - (savedAnchorH / 2)) < 15 {
+                        targetY = Int32((curAnchorH - savedSecH) / 2)
+                    } else {
+                        let centerRatio = (Double(rawRelY) + Double(savedSecH) / 2.0) / Double(max(1, savedAnchorH))
+                        targetY = Int32(round(centerRatio * Double(curAnchorH) - Double(savedSecH) / 2.0))
+                    }
+                }
+
+                displaysToConfigure.append((id: id, targetX: targetX, targetY: targetY))
                 foundAnySaved = true
             } else {
-                let b = CGDisplayBounds(id)
-                let relX = Int32(b.origin.x - currentAnchorBounds.origin.x)
-                let relY = Int32(b.origin.y - currentAnchorBounds.origin.y)
+                let relX = Int32(bounds.origin.x - currentAnchorBounds.origin.x)
+                let relY = Int32(bounds.origin.y - currentAnchorBounds.origin.y)
                 displaysToConfigure.append((id: id, targetX: relX, targetY: relY))
             }
         }
@@ -2081,18 +2169,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let anchorAtZero = currentAnchorBounds.origin == .zero && CGMainDisplayID() == anchorID
+        let keepPrimary = UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey)
+        let savedMainFingerprint = UserDefaults.standard.string(forKey: kSavedMainDisplayFingerprintKey)
+
+        var shiftX: Int32 = 0
+        var shiftY: Int32 = 0
+
+        // If user didn't request anchor as main display, and target wasn't main when activated,
+        // and saved main display is one of the secondary monitors (e.g. laptop panel):
+        if !keepPrimary,
+           let targetMainFp = savedMainFingerprint, targetMainFp != "anchor" {
+            if let mainSec = displaysToConfigure.first(where: { displayFingerprint($0.id) == targetMainFp }) {
+                shiftX = -mainSec.targetX
+                shiftY = -mainSec.targetY
+                debugLog("Arrangement: shifting arrangement by (\(shiftX), \(shiftY)) to keep saved main display \(targetMainFp) at (0, 0)")
+            }
+        }
+
+        let finalAnchorX = shiftX
+        let finalAnchorY = shiftY
+        for i in 0..<displaysToConfigure.count {
+            displaysToConfigure[i].targetX += shiftX
+            displaysToConfigure[i].targetY += shiftY
+        }
+
+        let anchorMatches = Int32(currentAnchorBounds.origin.x) == finalAnchorX && Int32(currentAnchorBounds.origin.y) == finalAnchorY
         let allSecondariesMatch = displaysToConfigure.allSatisfy { item in
             let bounds = CGDisplayBounds(item.id)
             return Int32(bounds.origin.x) == item.targetX && Int32(bounds.origin.y) == item.targetY
         }
 
-        if anchorAtZero && allSecondariesMatch {
+        if anchorMatches && allSecondariesMatch {
             debugLog("Arrangement: displays already correctly positioned")
             return true
         }
 
         debugLog("Arrangement: restoring positions for \(displaysToConfigure.count) display(s)...")
+
+        suppressArrangementSaving(for: 4.0)
 
         var configRef: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&configRef) == .success, let config = configRef else {
@@ -2100,7 +2214,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let errAnchor = CGConfigureDisplayOrigin(config, anchorID, 0, 0)
+        let errAnchor = CGConfigureDisplayOrigin(config, anchorID, finalAnchorX, finalAnchorY)
         if errAnchor != .success {
             debugLog("Arrangement: configure origin failed for anchor \(anchorID) (\(errAnchor.rawValue))")
             CGCancelDisplayConfiguration(config)
@@ -2131,13 +2245,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func setMainDisplay(_ targetID: CGDirectDisplayID) -> Bool {
         guard targetID != 0 else { return false }
 
-        // If multi-monitor arrangements are saved, restoring the arrangement
-        // puts targetID at (0, 0) and places all secondary monitors in their saved positions!
-        if restoreDisplayArrangement() {
-            debugLog("Primary: restored arrangement with display \(targetID) as main")
-            return true
-        }
-
         if CGMainDisplayID() == targetID {
             debugLog("Primary: display \(targetID) is already the main display")
             return true
@@ -2159,9 +2266,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var displayCount: UInt32 = 0
         CGGetOnlineDisplayList(32, &displayList, &displayCount)
 
+        suppressArrangementSaving(for: 4.0)
+
         for i in 0..<Int(displayCount) {
             let id = displayList[i]
-            if CGDisplayMirrorsDisplay(id) != kCGNullDirectDisplay { continue }
             let bounds = CGDisplayBounds(id)
             let newX = Int32(bounds.origin.x - targetOrigin.x)
             let newY = Int32(bounds.origin.y - targetOrigin.y)
@@ -2214,6 +2322,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // checkAndRestoreFromCrash() will re-apply it with the new rate.
         if (isActive || hasOrphanedVirtualDisplay()) && oldRate != rate.doubleValue {
             debugLog("Active display present, relaunching to apply new refresh rate...")
+            saveCurrentDisplayArrangement(force: true)
             isRestarting = true
             StatusWindowController.shared.show(message: "Applying refresh rate...")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
@@ -2290,9 +2399,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // If a virtual display is already active, restart to switch cleanly
         if isActive || hasOrphanedVirtualDisplay() {
             debugLog("Active display exists, restarting to apply custom config cleanly...")
+            saveCurrentDisplayArrangement(force: true)
             isRestarting = true
             StatusWindowController.shared.show(message: "Switching preset...")
-            saveCurrentDisplayArrangement()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
                 relaunchApp()
             }
@@ -2330,9 +2439,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // and checkAndRestoreFromCrash() applies the new preset on relaunch.
         if isActive || hasOrphanedVirtualDisplay() {
             debugLog("Active display exists, saving new preset and restarting to switch cleanly...")
+            saveCurrentDisplayArrangement(force: true)
             isRestarting = true
             StatusWindowController.shared.show(message: "Switching preset...")
-            saveCurrentDisplayArrangement()
             saveCurrentPreset(presetName)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
                 relaunchApp()
@@ -2589,6 +2698,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("Mirror result: \(success)")
 
         if success {
+            suppressArrangementSaving(for: 4.0)
             isActive = true
             currentPresetName = "\(config.logicalWidth)x\(config.logicalHeight)"
             targetExternalDisplayID = externalID  // Track target for disconnect detection
@@ -2597,6 +2707,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleAdaptiveSyncRepin(target: externalID, rate: pinRate)
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
+
+            if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
+                _ = self.setMainDisplay(virtualID)
+            }
 
             // Verify actual backing scale after display configuration settles
             if config.hiDPI {
@@ -2706,7 +2820,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let vendorID = CGDisplayVendorNumber(displayID)
-            let isVirtualDisplay = vendorID == 0x1234  // Our virtual displays use vendor 0x1234
+            let isVirtualDisplay = vendorID == 0x1234
             let isGhostDisplay = vendorID == 0x756E6B6E  // "unkn" — phantom display without EDID
 
             // Skip builtin, virtual, and ghost/phantom displays
@@ -2726,6 +2840,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // G9 57" is about 1400mm wide, G9 49" is about 1200mm wide
         // Sort by width descending to prefer larger displays
         candidates.sort { $0.size.width > $1.size.width }
+
+        // If not currently active, prioritize whichever external candidate was the main display
+        let currentMainID = CGMainDisplayID()
+        if !isActive && currentVirtualID == 0 {
+            if let mainCand = candidates.first(where: { $0.id == currentMainID }) {
+                debugLog("  -> Selected external display: \(mainCand.id) (current main display)")
+                return mainCand.id
+            }
+        }
 
         // With multiple externals, prefer the monitor the saved preset was
         // applied to — otherwise the fingerprint check can pass on one display
@@ -2825,7 +2948,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func cleanUpDisplays() {
         debugLog("Manual cleanup requested by user")
-        saveCurrentDisplayArrangement()
+        saveCurrentDisplayArrangement(force: true)
         isRestarting = true
         StatusWindowController.shared.show(message: "Cleaning up phantom displays...")
 
@@ -2854,7 +2977,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Virtual displays persist until process exit — must restart to truly remove them
         if isActive || hasOrphanedVirtualDisplay() {
             StatusWindowController.shared.show(message: "Disabling HiDPI...")
-            saveCurrentDisplayArrangement()
+            saveCurrentDisplayArrangement(force: true)
             isRestarting = true
             // Clear preset so relaunch does NOT restore
             clearSavedPreset()
