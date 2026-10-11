@@ -1153,6 +1153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// is (re)established. Shared by first apply, wake restore, and transient
     /// dropout recovery.
     func reassertPreferencesAfterSetup() {
+        suppressArrangementSaving(for: 4.0)
         let generation = setupGeneration
         if UserDefaults.standard.bool(forKey: kKeepHDREnabledKey) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -1264,7 +1265,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let isBuiltin = CGDisplayIsBuiltin(displayID) != 0
             let vendorID = CGDisplayVendorNumber(displayID)
 
-            // Our virtual displays use vendor ID 0x1234 or subtype 1665
+            // Our virtual displays (vendor 0x1234 or virtual notch display)
             let isVirtualDisplay = isOurVirtualDisplay(displayID)
 
             // Vendor 0x756E6B6E (1970170734) = "unkn" in ASCII — macOS placeholder for
@@ -1322,6 +1323,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             // Skip the display we currently own — it's not orphaned
             if currentVirtualID != 0 && displayID == currentVirtualID { continue }
+            // Our virtual displays (vendor 0x1234 or virtual notch display)
             if isOurVirtualDisplay(displayID) {
                 debugLog("Found orphaned virtual display: \(displayID)")
                 return true
@@ -1678,7 +1680,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let displayID = displayList[i]
             let mirrorOf = CGDisplayMirrorsDisplay(displayID)
             if mirrorOf != kCGNullDirectDisplay {
-                // Only claim mirror sets whose master is one of our virtual displays
+                // Only claim mirror sets whose master is one of our virtual
+                // displays — a mirror the user configured between two of
+                // their own displays isn't ours and must not flip the app to "active".
                 guard isOurVirtualDisplay(mirrorOf) else { continue }
                 if let mode = CGDisplayCopyDisplayMode(mirrorOf) {
                     let width = mode.width
@@ -2750,11 +2754,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleAdaptiveSyncRepin(target: externalID, rate: pinRate)
             StatusWindowController.shared.updateStatus("HiDPI enabled: \(config.logicalWidth)x\(config.logicalHeight)")
             debugLog(">>> HiDPI setup complete, monitoring for disconnect")
-
-            if self.wasTargetMain || UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
-                _ = self.setMainDisplay(virtualID)
-            }
-
             // Verify actual backing scale after display configuration settles
             if config.hiDPI {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
@@ -2883,15 +2882,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // G9 57" is about 1400mm wide, G9 49" is about 1200mm wide
         // Sort by width descending to prefer larger displays
         candidates.sort { $0.size.width > $1.size.width }
-
-        // If not currently active, prioritize whichever external candidate was the main display
-        let currentMainID = CGMainDisplayID()
-        if !isActive && currentVirtualID == 0 {
-            if let mainCand = candidates.first(where: { $0.id == currentMainID }) {
-                debugLog("  -> Selected external display: \(mainCand.id) (current main display)")
-                return mainCand.id
-            }
-        }
 
         // With multiple externals, prefer the monitor the saved preset was
         // applied to — otherwise the fingerprint check can pass on one display
