@@ -695,9 +695,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         defaults.set(Int(identity.serial), forKey: self.kBoundMonitorSerialKey)
     })
 
+    private let kSavedArrangementKey = "savedDisplayArrangementV1"
+    private let kRestoreArrangementKey = "restoreDisplayArrangement"
     private let kRecoveryReasonKey = "pendingDisplayRecoveryReason"
     private var setupRecoveryReason: DisplayRecoveryReason?
     private var activePhysicalIdentity: PhysicalMonitorIdentity?
+    private var arrangementSettling = false
+    private var arrangementWorkGeneration = 0
 
     // Track if we're waiting for monitor reconnection
     private var wasDisconnected = false
@@ -716,6 +720,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func advanceSetupGeneration() {
         recoveryWork.supersede()
+        arrangementSettling = false
     }
 
     // A disconnect confirmation pass is scheduled (debounce for transient
@@ -1176,13 +1181,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func reassertPreferencesAfterSetup() {
         let generation = setupGeneration
+        arrangementSettling = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self = self, generation == self.setupGeneration else { return }
+            self.arrangementSettling = false
             guard self.isActive, !self.isRestarting, !self.screensAsleep else { return }
             if self.preferenceWorkIsCurrent(generation), UserDefaults.standard.bool(forKey: self.kKeepHDREnabledKey) {
                 self.applyHDRPreference()
             }
-            if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
+            if UserDefaults.standard.bool(forKey: self.kRestoreArrangementKey) {
+                self.scheduleArrangementRestore(generation: generation)
+            } else if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
                 self.applyPrimaryDisplayPreference()
             }
         }
@@ -1220,6 +1229,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return nil // Ambiguous identity also declines automatic writes.
     }
 
+    func independentDesktops() -> [DisplayDesktop] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(32, &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).filter { CGDisplayMirrorsDisplay($0) == kCGNullDirectDisplay }.map { id in
+            let bounds = CGDisplayBounds(id)
+            var builtInUUID: String?
+            if CGDisplayIsBuiltin(id) != 0, let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() {
+                builtInUUID = CFUUIDCreateString(nil, uuid) as String
+            }
+            return DisplayDesktop(id: id, builtInUUID: builtInUUID,
+                origin: DisplayPoint(x: bounds.origin.x, y: bounds.origin.y),
+                size: DisplaySize(width: bounds.width, height: bounds.height))
+        }
+    }
+
     func currentPhysicalIdentity(_ physical: CGDirectDisplayID) -> PhysicalMonitorIdentity? {
         let identity = monitorIdentity(physical)
         if let saved = savedMonitorIdentity(), saved.matches(identity) { return identity }
@@ -1230,6 +1255,100 @@ class AppDelegate: NSObject, NSApplicationDelegate {
            let captured = activePhysicalIdentity, savedMonitorIdentity()?.matches(captured) == true { return captured }
         return identity.isKnown ? identity : nil
     }
+
+    @objc func saveCurrentDisplayArrangement() {
+        guard preferenceWorkIsCurrent(setupGeneration), !isSettingUp, !arrangementSettling,
+              let physical = boundPhysicalDisplay(), CGDisplayMirrorsDisplay(physical) == currentVirtualID,
+              let identity = currentPhysicalIdentity(physical), let bound = savedMonitorIdentity() else {
+            reportArrangementError("Wait until HiDPI setup and the mirror have settled before saving.")
+            return
+        }
+        do {
+            let snapshot = try DisplayLayoutPlanner.capture(physical: identity, bound: bound,
+                desktops: independentDesktops(), mirrorMasterID: currentVirtualID, mainID: CGMainDisplayID())
+            let data = try JSONEncoder().encode(snapshot)
+            UserDefaults.standard.set(data, forKey: kSavedArrangementKey)
+            UserDefaults.standard.set(true, forKey: kRestoreArrangementKey)
+            arrangementWorkGeneration += 1 // An old settling retry cannot apply the previous snapshot.
+            debugLog("Arrangement saved explicitly (schema 1)")
+            rebuildMenu()
+        } catch { reportArrangementError((error as? DisplayLayoutError)?.rawValue ?? error.localizedDescription) }
+    }
+
+    @objc func restoreSavedDisplayArrangement() {
+        guard preferenceWorkIsCurrent(setupGeneration), !isSettingUp else {
+            reportArrangementError("HiDPI must be active and settled before restoring.")
+            return
+        }
+        scheduleArrangementRestore(generation: setupGeneration)
+    }
+
+    @objc func toggleRestoreArrangement(_ sender: NSMenuItem) {
+        let enabled = !UserDefaults.standard.bool(forKey: kRestoreArrangementKey)
+        UserDefaults.standard.set(enabled, forKey: kRestoreArrangementKey)
+        arrangementWorkGeneration += 1
+        rebuildMenu()
+    }
+
+    func reportArrangementError(_ message: String) {
+        debugLog("Arrangement: \(message)")
+        let alert = NSAlert()
+        alert.messageText = "Display Arrangement"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    func scheduleArrangementRestore(generation: Int) {
+        arrangementWorkGeneration += 1
+        restoreArrangement(generation: generation, workGeneration: arrangementWorkGeneration, attempt: 1)
+    }
+
+    func restoreArrangement(generation: Int, workGeneration: Int, attempt: Int) {
+        guard generation == setupGeneration, isActive, !isRestarting, !screensAsleep,
+              workGeneration == arrangementWorkGeneration else { return }
+        guard let data = UserDefaults.standard.data(forKey: kSavedArrangementKey),
+              let snapshot = DisplayLayoutSnapshot.decode(data) else {
+            debugLog("Arrangement: no valid saved snapshot; save the current arrangement first")
+            return
+        }
+        do {
+            guard let physical = boundPhysicalDisplay(), CGDisplayMirrorsDisplay(physical) == currentVirtualID else {
+                throw DisplayLayoutError.missingMirrorMaster
+            }
+            let plan = try DisplayLayoutPlanner.restore(snapshot, physical: currentPhysicalIdentity(physical),
+                desktops: independentDesktops(), mirrorMasterID: currentVirtualID,
+                keepExternalMain: UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey))
+            guard preferenceWorkIsCurrent(generation) else { return }
+            var ref: CGDisplayConfigRef?
+            guard CGBeginDisplayConfiguration(&ref) == .success, let config = ref else {
+                throw DisplayLayoutError.missingMirrorMaster
+            }
+            for (id, point) in [(plan.builtInID, plan.builtInOrigin), (plan.mirrorMasterID, plan.externalOrigin)] {
+                guard CGConfigureDisplayOrigin(config, id, Int32(point.x), Int32(point.y)) == .success else {
+                    CGCancelDisplayConfiguration(config)
+                    throw DisplayLayoutError.missingMirrorMaster
+                }
+            }
+            guard preferenceWorkIsCurrent(generation), workGeneration == arrangementWorkGeneration else {
+                CGCancelDisplayConfiguration(config)
+                return
+            }
+            let result = CGCompleteDisplayConfiguration(config, .forSession)
+            if result != .success { throw DisplayLayoutError.missingMirrorMaster }
+            debugLog("Arrangement restored for this session")
+        } catch {
+            debugLog("Arrangement: \((error as? DisplayLayoutError)?.rawValue ?? error.localizedDescription)")
+            // Only topology settling is retryable. Changed scaling, unknown
+            // hardware and extra desktops require an explicit new save.
+            guard let layoutError = error as? DisplayLayoutError,
+                  [.missingBuiltIn, .missingMirrorMaster].contains(layoutError), attempt < 5 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.restoreArrangement(generation: generation, workGeneration: workGeneration, attempt: attempt + 1)
+            }
+        }
+    }
+
 
     // Find a real physical monitor (not built-in, not virtual, not a ghost/phantom display)
     func findRealPhysicalMonitor(verbose: Bool = false) -> CGDirectDisplayID? {
@@ -1777,6 +1896,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         keepPrimaryItem.state = UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey) ? .on : .off
         settingsMenu.addItem(keepPrimaryItem)
 
+        settingsMenu.addItem(NSMenuItem.separator())
+        let saveArrangementItem = NSMenuItem(title: "Save Current Display Arrangement", action: #selector(saveCurrentDisplayArrangement), keyEquivalent: "")
+        saveArrangementItem.target = self
+        settingsMenu.addItem(saveArrangementItem)
+        let restoreArrangementItem = NSMenuItem(title: "Restore Saved Display Arrangement", action: #selector(restoreSavedDisplayArrangement), keyEquivalent: "")
+        restoreArrangementItem.target = self
+        settingsMenu.addItem(restoreArrangementItem)
+        let arrangementItem = NSMenuItem(title: "Restore Display Arrangement", action: #selector(toggleRestoreArrangement(_:)), keyEquivalent: "")
+        arrangementItem.target = self
+        arrangementItem.state = UserDefaults.standard.bool(forKey: kRestoreArrangementKey) ? .on : .off
+        settingsMenu.addItem(arrangementItem)
+        settingsMenu.addItem(NSMenuItem.separator())
+
         let autoUpdateItem = NSMenuItem(title: "Check for Updates Automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
         autoUpdateItem.target = self
         autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
@@ -1928,7 +2060,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// origin — keeping every display's relative position while landing the target
     /// at (0,0). Returns true if the target is (or becomes) the main display.
     func setMainDisplay(_ targetID: CGDirectDisplayID) -> Bool {
-        guard targetID != 0 else { return false }
+        guard targetID != 0, independentDesktops().contains(where: { $0.id == targetID }) else { return false }
 
         if CGMainDisplayID() == targetID {
             debugLog("Primary: display \(targetID) is already the main display")
@@ -1947,20 +2079,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        var displayList = [CGDirectDisplayID](repeating: 0, count: 32)
-        var displayCount: UInt32 = 0
-        CGGetOnlineDisplayList(32, &displayList, &displayCount)
-
-        for i in 0..<Int(displayCount) {
-            let id = displayList[i]
-            let bounds = CGDisplayBounds(id)
-            let newX = Int32(bounds.origin.x - targetOrigin.x)
-            let newY = Int32(bounds.origin.y - targetOrigin.y)
-            let err = CGConfigureDisplayOrigin(config, id, newX, newY)
+        for desktop in independentDesktops() {
+            let point = DisplayPoint(x: desktop.origin.x - targetOrigin.x, y: desktop.origin.y - targetOrigin.y)
+            guard point.isValid else { CGCancelDisplayConfiguration(config); return false }
+            let err = CGConfigureDisplayOrigin(config, desktop.id, Int32(point.x), Int32(point.y))
             if err != .success {
-                // Abort rather than commit a partial arrangement (a display
-                // can disappear mid-transaction during wake).
-                debugLog("Primary: configure origin failed for display \(id) (\(err.rawValue)), cancelling")
                 CGCancelDisplayConfiguration(config)
                 return false
             }
@@ -2613,6 +2736,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func disableHiDPIAction() {
         advanceSetupGeneration()
+        arrangementWorkGeneration += 1
         disconnectConfirmationPending = false
         isSettingUp = false
         wasDisconnected = false

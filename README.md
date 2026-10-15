@@ -51,6 +51,12 @@ cp -r "build/G9 Helper.app" /Applications/
 
 Click the display icon in your menu bar, pick your monitor, pick a resolution preset. Takes a few seconds to apply. To turn it off, select **Disable HiDPI** from the same menu.
 
+### Remember display arrangement
+
+After applying a preset and arranging your displays in macOS, choose **Settings → Save Current Display Arrangement**. This enables **Restore Display Arrangement**, which reapplies the saved relative position and main display after setup, wake or mirror repair. **Restore Saved Display Arrangement** applies it immediately. Uncheck automatic restoration to keep the saved arrangement without applying it after setup or wake. Ordinary display notifications leave a healthy arrangement alone, so you can still move displays manually.
+
+Arrangement restoration supports one mirrored physical monitor and the active built-in display. It waits briefly for reconnecting displays, and declines restoration for clamshell mode, additional independent desktops, unknown or mismatched monitors, or changed logical display sizes. Arrange and save again after changing scaling. **Keep External as Main Display** overrides the saved main-display choice.
+
 ### Custom scale
 
 Every monitor submenu has a **Custom Scale...** option — it opens a slider for any factor between 1.1x and 2.0x. The resolution preview updates as you drag.
@@ -152,9 +158,9 @@ Built with Swift (UI) and Objective-C (display management). The VirtualDisplayMa
 
 ### Development and tests
 
-Run `cd App && ./test.sh` for deterministic monitor-binding and recovery regression tests. The tests use synthetic fixtures and injected storage without changing displays or user preferences. Compiler caches default to the ignored `App/build/tests` directory; `CLANG_MODULE_CACHE_PATH` and `SWIFT_MODULECACHE_PATH` can override them. Run `cd App && ./build.sh` to build the universal arm64/x86_64 app, with ad-hoc signing when no Developer ID certificate is available.
+Run `cd App && ./test.sh` for deterministic layout, monitor-binding and recovery regression tests. The tests use synthetic fixtures and injected storage without changing displays or user preferences. Compiler caches default to the ignored `App/build/tests` directory; `CLANG_MODULE_CACHE_PATH` and `SWIFT_MODULECACHE_PATH` can override them. Run `cd App && ./build.sh` to build the universal arm64/x86_64 app, with ad-hoc signing when no Developer ID certificate is available.
 
-These tests cover monitor binding and recovery policy; private display APIs, physical reconnects, sleep/wake, Adaptive Sync, cursor behavior and window placement still need hardware validation. A passing test suite or build does not verify those behaviors.
+These tests cover policy and geometry; private display APIs, physical reconnects, sleep/wake, Adaptive Sync, cursor behavior and window placement still need hardware validation. A passing test suite or build does not verify those behaviors.
 
 ## Uninstall
 

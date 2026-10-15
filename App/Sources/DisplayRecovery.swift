@@ -43,6 +43,99 @@ struct PhysicalMonitorBinding {
     }
 }
 
+struct DisplayPoint: Codable, Equatable {
+    let x: Double
+    let y: Double
+    static let zero = DisplayPoint(x: 0, y: 0)
+    var isValid: Bool {
+        [x, y].allSatisfy { $0.isFinite && $0.rounded() == $0 && $0 >= Double(Int32.min) && $0 <= Double(Int32.max) }
+    }
+}
+
+struct DisplaySize: Codable, Equatable {
+    let width: Double
+    let height: Double
+    var isValid: Bool { width.isFinite && height.isFinite && width > 0 && height > 0 && width <= Double(Int32.max) && height <= Double(Int32.max) }
+}
+
+/// Runtime-only topology. Only independent, active desktops belong in this list.
+struct DisplayDesktop: Equatable {
+    let id: UInt32
+    let builtInUUID: String?
+    let origin: DisplayPoint
+    let size: DisplaySize
+}
+
+struct DisplayLayoutSnapshot: Codable, Equatable {
+    let schemaVersion: Int
+    let physicalMonitor: PhysicalMonitorIdentity
+    let builtInUUID: String
+    let externalOffset: DisplayPoint
+    let builtInSize: DisplaySize
+    let externalSize: DisplaySize
+    let externalIsMain: Bool
+
+    var isValid: Bool {
+        schemaVersion == 1 && physicalMonitor.isKnown && !builtInUUID.isEmpty && externalOffset.isValid && builtInSize.isValid && externalSize.isValid
+    }
+
+    static func decode(_ data: Data) -> Self? {
+        guard let snapshot = try? JSONDecoder().decode(Self.self, from: data), snapshot.isValid else { return nil }
+        return snapshot
+    }
+}
+
+enum DisplayLayoutError: String, Error {
+    case unknownIdentity = "Monitor identity is unavailable or does not match."
+    case missingBuiltIn = "Built-in display is missing or changed (clamshell is not supported)."
+    case missingMirrorMaster = "The active mirror desktop is not ready."
+    case extraDesktops = "Arrangement requires exactly the built-in and mirror desktops; other desktops are left untouched."
+    case dimensionsChanged = "Logical display sizes changed. Arrange displays and save again."
+    case invalidGeometry = "Saved or current geometry is invalid."
+}
+
+struct DisplayLayoutPlan: Equatable {
+    let builtInID: UInt32
+    let mirrorMasterID: UInt32
+    let builtInOrigin: DisplayPoint
+    let externalOrigin: DisplayPoint
+}
+
+enum DisplayLayoutPlanner {
+    static func capture(physical: PhysicalMonitorIdentity, bound: PhysicalMonitorIdentity,
+                        desktops: [DisplayDesktop], mirrorMasterID: UInt32, mainID: UInt32) throws -> DisplayLayoutSnapshot {
+        guard bound.matches(physical) else { throw DisplayLayoutError.unknownIdentity }
+        guard let builtIn = desktops.first(where: { $0.builtInUUID != nil }) else { throw DisplayLayoutError.missingBuiltIn }
+        guard let external = desktops.first(where: { $0.id == mirrorMasterID }), external.id != builtIn.id else { throw DisplayLayoutError.missingMirrorMaster }
+        guard desktops.count == 2, Set(desktops.map(\.id)).count == 2 else { throw DisplayLayoutError.extraDesktops }
+        guard builtIn.origin.isValid, external.origin.isValid, mainID == builtIn.id || mainID == external.id else { throw DisplayLayoutError.invalidGeometry }
+        let snapshot = DisplayLayoutSnapshot(schemaVersion: 1, physicalMonitor: physical,
+            builtInUUID: builtIn.builtInUUID!,
+            externalOffset: DisplayPoint(x: external.origin.x - builtIn.origin.x, y: external.origin.y - builtIn.origin.y),
+            builtInSize: builtIn.size, externalSize: external.size, externalIsMain: mainID == external.id)
+        guard snapshot.isValid else { throw DisplayLayoutError.invalidGeometry }
+        return snapshot
+    }
+
+    static func restore(_ saved: DisplayLayoutSnapshot, physical: PhysicalMonitorIdentity?,
+                        desktops: [DisplayDesktop], mirrorMasterID: UInt32,
+                        keepExternalMain: Bool) throws -> DisplayLayoutPlan {
+        guard saved.isValid else { throw DisplayLayoutError.invalidGeometry }
+        guard let physical = physical, saved.physicalMonitor.matches(physical) else { throw DisplayLayoutError.unknownIdentity }
+        guard let builtIn = desktops.first(where: { $0.builtInUUID == saved.builtInUUID }) else { throw DisplayLayoutError.missingBuiltIn }
+        guard let external = desktops.first(where: { $0.id == mirrorMasterID }), external.id != builtIn.id else { throw DisplayLayoutError.missingMirrorMaster }
+        guard desktops.count == 2, Set(desktops.map(\.id)).count == 2 else { throw DisplayLayoutError.extraDesktops }
+        guard builtIn.size == saved.builtInSize, external.size == saved.externalSize else { throw DisplayLayoutError.dimensionsChanged }
+        guard builtIn.origin.isValid, external.origin.isValid else { throw DisplayLayoutError.invalidGeometry }
+        let externalMain = keepExternalMain || saved.externalIsMain
+        let builtinOrigin = externalMain ? DisplayPoint(x: -saved.externalOffset.x, y: -saved.externalOffset.y) : .zero
+        let externalOrigin = externalMain ? .zero : saved.externalOffset
+        guard builtinOrigin.isValid, externalOrigin.isValid else { throw DisplayLayoutError.invalidGeometry }
+        return DisplayLayoutPlan(builtInID: builtIn.id, mirrorMasterID: external.id,
+                                 builtInOrigin: builtinOrigin, externalOrigin: externalOrigin)
+    }
+}
+
 enum DisplayRecoveryReason: String {
     case reconnect, crash, active, manual
     func isAllowed(autoApply: Bool, autoRestore: Bool) -> Bool {

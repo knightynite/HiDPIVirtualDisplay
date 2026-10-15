@@ -11,6 +11,16 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
     if !condition() { throw TestFailure.assertion(message) }
 }
 
+private func expectError(_ expected: DisplayLayoutError, _ operation: () throws -> Void) throws {
+    do {
+        try operation()
+    } catch let actual as DisplayLayoutError {
+        try expect(actual == expected, "Expected \(expected), received \(actual)")
+        return
+    }
+    throw TestFailure.assertion("Expected \(expected), operation succeeded")
+}
+
 /// Simulates retained preferences while allowing fresh production bindings.
 private final class MonitorBindingStorage {
     var identity: PhysicalMonitorIdentity?
@@ -30,6 +40,36 @@ private final class MonitorBindingStorage {
 private struct DisplayRecoveryTests {
     // All monitor and geometry fixtures are synthetic, not captured hardware data.
     static let monitor = PhysicalMonitorIdentity(vendor: 0x4567, model: 0x1001, serial: 1)
+    static let builtInSize = DisplaySize(width: 1600, height: 1000)
+    static let externalSize = DisplaySize(width: 3840, height: 1080)
+    static let offset = DisplayPoint(x: -960, y: -1080)
+
+    static func desktops(builtInID: UInt32 = 1, mirrorID: UInt32 = 8,
+                         builtInOrigin: DisplayPoint = .zero,
+                         externalOrigin: DisplayPoint = offset,
+                         uuid: String = "built-in-uuid",
+                         builtInSize: DisplaySize = builtInSize,
+                         externalSize: DisplaySize = externalSize) -> [DisplayDesktop] {
+        [DisplayDesktop(id: builtInID, builtInUUID: uuid, origin: builtInOrigin, size: builtInSize),
+         DisplayDesktop(id: mirrorID, builtInUUID: nil, origin: externalOrigin, size: externalSize)]
+    }
+
+    static func saved(externalMain: Bool = false, offset: DisplayPoint = offset,
+                      schemaVersion: Int = 1, uuid: String = "built-in-uuid",
+                      builtInSize: DisplaySize = builtInSize,
+                      externalSize: DisplaySize = externalSize) -> DisplayLayoutSnapshot {
+        DisplayLayoutSnapshot(schemaVersion: schemaVersion, physicalMonitor: monitor,
+            builtInUUID: uuid, externalOffset: offset, builtInSize: builtInSize,
+            externalSize: externalSize, externalIsMain: externalMain)
+    }
+
+    static func restore(_ snapshot: DisplayLayoutSnapshot = saved(),
+                        physical: PhysicalMonitorIdentity? = monitor,
+                        topology: [DisplayDesktop] = desktops(), mirrorID: UInt32 = 8,
+                        overrideMain: Bool = false) throws -> DisplayLayoutPlan {
+        try DisplayLayoutPlanner.restore(snapshot, physical: physical, desktops: topology,
+            mirrorMasterID: mirrorID, keepExternalMain: overrideMain)
+    }
 
     static func main() {
         var passed = 0
@@ -115,6 +155,143 @@ private struct DisplayRecoveryTests {
             try expect(MonitorBindingStorage(unknown).binding().savedIdentity == nil, "Unknown stored identity authorized recovery")
         }
 
+        test("capture and Codable roundtrip persist physical identity and relative geometry only") {
+            let snapshot = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                desktops: desktops(), mirrorMasterID: 8, mainID: 1)
+            let data = try JSONEncoder().encode(snapshot)
+            try expect(DisplayLayoutSnapshot.decode(data) == snapshot, "Codable roundtrip changed snapshot")
+            let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            try expect(Set(object.keys) == Set(["schemaVersion", "physicalMonitor", "builtInUUID", "externalOffset", "builtInSize", "externalSize", "externalIsMain"]), "Unexpected persisted fields, possibly runtime display IDs")
+            let identity = object["physicalMonitor"] as! [String: Any]
+            try expect(Set(identity.keys) == Set(["vendor", "model", "serial"]), "Runtime IDs entered persistent identity")
+            try expect(snapshot.externalOffset == offset, "Captured offset is wrong")
+        }
+        test("restore resolves fresh runtime IDs after reconnect") {
+            let plan = try restore(topology: desktops(builtInID: 41, mirrorID: 108,
+                externalOrigin: DisplayPoint(x: 1600, y: 0)), mirrorID: 108)
+            try expect(plan.builtInID == 41 && plan.mirrorMasterID == 108, "Restore used old runtime IDs")
+            try expect(plan.externalOrigin == offset && plan.builtInOrigin == .zero, "Fresh topology lost saved geometry")
+        }
+        test("serial match survives the monitor model changing") {
+            let changed = PhysicalMonitorIdentity(vendor: monitor.vendor, model: monitor.model + 1, serial: monitor.serial)
+            try expect(monitor.matches(changed), "Same serial with changed model should match")
+            _ = try restore(physical: changed)
+        }
+        test("different serial is rejected even when model matches") {
+            let other = PhysicalMonitorIdentity(vendor: monitor.vendor, model: monitor.model, serial: monitor.serial + 1)
+            try expect(!monitor.matches(other), "Conflicting serial was accepted")
+            try expectError(.unknownIdentity) { _ = try restore(physical: other) }
+        }
+        test("saved serial requires a currently reported serial") {
+            let unidentified = PhysicalMonitorIdentity(vendor: monitor.vendor, model: monitor.model, serial: 0)
+            try expect(!monitor.matches(unidentified), "Missing serial silently fell back to model")
+            try expectError(.unknownIdentity) { _ = try restore(physical: unidentified) }
+        }
+        test("model fallback is available only when saved serial is unavailable") {
+            let noSerial = PhysicalMonitorIdentity(vendor: monitor.vendor, model: monitor.model, serial: 0)
+            try expect(noSerial.matches(monitor), "Legacy model fallback did not match")
+            try expect(!noSerial.matches(PhysicalMonitorIdentity(vendor: monitor.vendor, model: monitor.model + 1, serial: monitor.serial)), "Model fallback accepted a different model")
+        }
+        test("wrong vendor and unknown or virtual identities are rejected") {
+            for vendor: UInt32 in [0, 0x756E6B6E, 0x1234, monitor.vendor + 1] {
+                let other = PhysicalMonitorIdentity(vendor: vendor, model: monitor.model, serial: monitor.serial)
+                try expect(!monitor.matches(other), "Invalid vendor matched")
+            }
+            try expectError(.unknownIdentity) { _ = try restore(physical: nil) }
+            try expect(!PhysicalMonitorIdentity(vendor: monitor.vendor, model: 0, serial: 0).isKnown, "Empty identity is considered known")
+        }
+        test("missing or changed built-in display waits without a layout plan") {
+            try expectError(.missingBuiltIn) { _ = try restore(topology: [desktops()[1]]) }
+            try expectError(.missingBuiltIn) { _ = try restore(topology: desktops(uuid: "another-built-in")) }
+        }
+        test("missing mirror master is rejected") {
+            try expectError(.missingMirrorMaster) { _ = try restore(mirrorID: 99) }
+            try expectError(.missingMirrorMaster) { _ = try restore(mirrorID: 1) }
+        }
+        test("capture rejects missing built-in or mirror master") {
+            try expectError(.missingBuiltIn) {
+                _ = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                    desktops: [desktops()[1]], mirrorMasterID: 8, mainID: 8)
+            }
+            try expectError(.missingMirrorMaster) {
+                _ = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                    desktops: desktops(), mirrorMasterID: 99, mainID: 1)
+            }
+        }
+        test("logical dimension changes require a newly saved arrangement") {
+            try expectError(.dimensionsChanged) {
+                _ = try restore(topology: desktops(externalSize: DisplaySize(width: 3200, height: 900)))
+            }
+            try expectError(.dimensionsChanged) {
+                _ = try restore(topology: desktops(builtInSize: DisplaySize(width: 1400, height: 900)))
+            }
+        }
+        test("above offset and built-in primary are restored exactly") {
+            let plan = try restore()
+            try expect(plan.externalOrigin == DisplayPoint(x: -960, y: -1080), "Above offset was changed")
+            try expect(plan.builtInOrigin == .zero, "Built-in primary moved away from origin")
+        }
+        test("external primary translates both displays without changing relative positions") {
+            let topology = desktops(builtInOrigin: DisplayPoint(x: 960, y: 1080), externalOrigin: .zero)
+            let snapshot = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                desktops: topology, mirrorMasterID: 8, mainID: 8)
+            try expect(snapshot.externalIsMain, "Capture lost external main display")
+            let plan = try restore(snapshot)
+            try expect(plan.externalOrigin == .zero, "External primary is not at origin")
+            try expect(plan.builtInOrigin == DisplayPoint(x: 960, y: 1080), "Relative position changed during main-display translation")
+        }
+        test("Keep External as Main overrides a saved built-in primary") {
+            let plan = try restore(overrideMain: true)
+            try expect(plan.externalOrigin == .zero && plan.builtInOrigin == DisplayPoint(x: 960, y: 1080), "Main-display override ignored")
+        }
+        test("extra active desktops are never rearranged") {
+            let extra = DisplayDesktop(id: 77, builtInUUID: nil, origin: DisplayPoint(x: 6000, y: 0), size: DisplaySize(width: 1920, height: 1080))
+            try expectError(.extraDesktops) { _ = try restore(topology: desktops() + [extra]) }
+            try expectError(.extraDesktops) {
+                _ = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                    desktops: desktops() + [extra], mirrorMasterID: 8, mainID: 1)
+            }
+        }
+        test("nonfinite fractional and out-of-range coordinates are rejected") {
+            for value in [Double.nan, Double.infinity, -Double.infinity, 0.5, Double(Int32.max) + 1, Double(Int32.min) - 1] {
+                try expect(!DisplayPoint(x: value, y: 0).isValid, "Invalid coordinate \(value) accepted")
+                try expectError(.invalidGeometry) { _ = try restore(saved(offset: DisplayPoint(x: value, y: 0))) }
+                try expectError(.invalidGeometry) { _ = try restore(topology: desktops(externalOrigin: DisplayPoint(x: 0, y: value))) }
+            }
+        }
+        test("invalid sizes and empty built-in identity invalidate saved data") {
+            for size in [DisplaySize(width: .nan, height: 1080), DisplaySize(width: 3840, height: .infinity), DisplaySize(width: 0, height: 1080), DisplaySize(width: -1, height: 1080), DisplaySize(width: Double(Int32.max) + 1, height: 1080)] {
+                try expect(!saved(externalSize: size).isValid, "Invalid dimensions accepted")
+                try expectError(.invalidGeometry) { _ = try restore(saved(externalSize: size)) }
+            }
+            try expect(!saved(uuid: "").isValid, "Empty built-in identity accepted")
+        }
+        test("capture detects subtraction overflow and invalid main display") {
+            let overflow = desktops(builtInOrigin: DisplayPoint(x: Double(Int32.min), y: 0),
+                externalOrigin: DisplayPoint(x: Double(Int32.max), y: 0))
+            try expectError(.invalidGeometry) {
+                _ = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                    desktops: overflow, mirrorMasterID: 8, mainID: 1)
+            }
+            try expectError(.invalidGeometry) {
+                _ = try DisplayLayoutPlanner.capture(physical: monitor, bound: monitor,
+                    desktops: desktops(), mirrorMasterID: 8, mainID: 99)
+            }
+        }
+        test("primary translation detects Int32 negation overflow") {
+            let snapshot = saved(externalMain: true, offset: DisplayPoint(x: Double(Int32.min), y: 0))
+            try expect(snapshot.isValid, "Boundary snapshot should be valid before translation")
+            try expectError(.invalidGeometry) { _ = try restore(snapshot) }
+        }
+        test("corrupt incomplete and unknown-schema persisted data is rejected") {
+            for text in ["not JSON", "{}", "[]", "{\"schemaVersion\":1}"] {
+                try expect(DisplayLayoutSnapshot.decode(Data(text.utf8)) == nil, "Corrupt data accepted")
+            }
+            let future = try JSONEncoder().encode(saved(schemaVersion: 2))
+            try expect(DisplayLayoutSnapshot.decode(future) == nil, "Unsupported schema accepted")
+            let fractional = try JSONEncoder().encode(saved(offset: DisplayPoint(x: 0.5, y: 0)))
+            try expect(DisplayLayoutSnapshot.decode(fractional) == nil, "Invalid decoded geometry accepted")
+        }
         test("a disappeared monitor preserves pending recovery") {
             var state = DisplayRecoveryState(waiting: false, failures: 1, limit: 3)
             state.missingMonitor()
