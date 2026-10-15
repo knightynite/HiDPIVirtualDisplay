@@ -28,7 +28,7 @@ brew install knightynite/g9-helper/g9-helper
 
 ### Manual
 
-Grab [`G9.Helper-v1.2.6.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.6/G9.Helper-v1.2.6.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
+Grab [`G9.Helper-v1.2.7.dmg`](https://github.com/knightynite/HiDPIVirtualDisplay/releases/download/v1.2.7/G9.Helper-v1.2.7.dmg) from [Releases](https://github.com/knightynite/HiDPIVirtualDisplay/releases), open it, drag to Applications.
 
 The app is signed and notarized by Apple, so it opens without a security prompt.
 

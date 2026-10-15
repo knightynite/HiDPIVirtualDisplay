@@ -7,7 +7,7 @@ APP_NAME="G9 Helper"
 DMG_NAME="G9.Helper"
 BUILD_DIR="build"
 DMG_DIR="${BUILD_DIR}/dmg"
-VERSION="1.2.6"
+VERSION="1.2.7"
 
 echo "Creating DMG..."
 
@@ -54,7 +54,7 @@ ln -s /Applications "${DMG_DIR}/Applications"
 
 # Create README
 cat > "${DMG_DIR}/README.txt" << 'EOF'
-G9 Helper v1.2.6 - Free Software
+G9 Helper v1.2.7 - Free Software
 
 Unlock crisp HiDPI (Retina) scaling on Samsung Odyssey G9
 and other large monitors.
