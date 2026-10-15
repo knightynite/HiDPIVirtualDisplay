@@ -51,6 +51,12 @@ cp -r "build/G9 Helper.app" /Applications/
 
 Click the display icon in your menu bar, pick your monitor, pick a resolution preset. Takes a few seconds to apply. To turn it off, select **Disable HiDPI** from the same menu.
 
+### Remember display arrangement
+
+After applying a preset and arranging your displays in macOS, choose **Settings → Save Current Display Arrangement**. This enables **Restore Display Arrangement**, which reapplies the saved relative position and main display after setup, wake or mirror repair. **Restore Saved Display Arrangement** applies it immediately. Uncheck automatic restoration to keep the saved arrangement without applying it after setup or wake. Ordinary display notifications leave a healthy arrangement alone, so you can still move displays manually.
+
+Arrangement restoration supports one mirrored physical monitor and the active built-in display. It waits briefly for reconnecting displays, and declines restoration for clamshell mode, additional independent desktops, unknown or mismatched monitors, or changed logical display sizes. Arrange and save again after changing scaling. **Keep External as Main Display** overrides the saved main-display choice.
+
 ### Custom scale
 
 Every monitor submenu has a **Custom Scale...** option — it opens a slider for any factor between 1.1x and 2.0x. The resolution preview updates as you drag.
@@ -88,7 +94,7 @@ If you make your external monitor the primary display (the one with the menu bar
 
 ## Monitor-aware auto-apply
 
-When you apply a preset, G9 Helper remembers which monitor was connected (by vendor and model ID). Auto-apply on reconnect, crash recovery, and wake-from-sleep will only activate if the same monitor is plugged in. If you switch locations and plug into a different display, the app stays idle instead of trying to apply the wrong configuration. Manually applying a preset on a new monitor updates the binding.
+When you manually apply a preset, G9 Helper remembers the physical monitor before starting setup. It uses vendor and serial when available, with vendor/model as a fallback when no serial is reported. Automatic recovery requires that saved identity; plugging in a different monitor leaves the app idle. Manually applying a preset on a new monitor updates the binding, even if that first setup is interrupted.
 
 ## Auto-start & crash recovery
 
@@ -103,6 +109,8 @@ cd /path/to/HiDPIVirtualDisplay/App
 ./install-launchd.sh install    # enable
 ./install-launchd.sh uninstall  # disable
 ```
+
+**Auto-Apply on Reconnect** controls starting again after a physical disconnect; **Auto-Restore After Crash** controls crash startup. Maintaining an already active session and completing an explicit preset, refresh-rate or cleanup restart work independently of those automatic-start settings. Pending recovery survives an interrupted setup. Creation, mirror and cleanup failures share a persisted limit of three attempts; manually applying a preset starts a fresh attempt. A missing or mismatched monitor waits without consuming that budget.
 
 ## Requirements
 
@@ -147,6 +155,12 @@ cd /path/to/HiDPIVirtualDisplay/App
 4. The framebuffer gets scaled to your monitor's native resolution
 
 Built with Swift (UI) and Objective-C (display management). The VirtualDisplayManager is compiled without ARC (`-fno-objc-arc`) because the private CGVirtualDisplay APIs need manual memory control.
+
+### Development and tests
+
+Run `cd App && ./test.sh` for deterministic layout, monitor-binding and recovery regression tests. The tests use synthetic fixtures and injected storage without changing displays or user preferences. Compiler caches default to the ignored `App/build/tests` directory; `CLANG_MODULE_CACHE_PATH` and `SWIFT_MODULECACHE_PATH` can override them. Run `cd App && ./build.sh` to build the universal arm64/x86_64 app, with ad-hoc signing when no Developer ID certificate is available.
+
+These tests cover policy and geometry; private display APIs, physical reconnects, sleep/wake, Adaptive Sync, cursor behavior and window placement still need hardware validation. A passing test suite or build does not verify those behaviors.
 
 ## Uninstall
 
