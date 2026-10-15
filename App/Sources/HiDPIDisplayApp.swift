@@ -1150,8 +1150,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.ensureMirrorIntact()
             if self.restoreDisplayArrangement() {
                 debugLog("Arrangement: restored successfully after setup")
-            } else if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
-                self.applyPrimaryDisplayPreference()
+            } else {
+                if UserDefaults.standard.bool(forKey: self.kKeepPrimaryDisplayKey) {
+                    self.applyPrimaryDisplayPreference()
+                }
+                self.scheduleSaveDisplayArrangement()
             }
             self.isSettingUp = false
             debugLog("HiDPI setup and arrangement restore fully settled")
@@ -1186,9 +1189,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // (offline) Adaptive Sync mirror, restore the fixed mode.
                 repinIfDeepMirrorFormed()
                 if mirrorBroken && mirrorOk {
-                    debugLog("Mirror reattached after dropout — suppressing save and restoring arrangement")
+                    debugLog("Mirror reattached after dropout — suppressing save and scheduling arrangement restore in 2.0s")
                     suppressArrangementSaving(for: 4.0)
-                    restoreDisplayArrangement()
+                    let generation = setupGeneration
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                        guard let self = self, generation == self.setupGeneration else { return }
+                        _ = self.restoreDisplayArrangement()
+                    }
                 } else {
                     scheduleSaveDisplayArrangement()
                 }
