@@ -1785,6 +1785,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         keepPrimaryItem.state = UserDefaults.standard.bool(forKey: kKeepPrimaryDisplayKey) ? .on : .off
         settingsMenu.addItem(keepPrimaryItem)
 
+        // A MacBook in clamshell mode sleeps the moment its only display goes
+        // away (monitor standby, input switch, cable blip). No power assertion
+        // an app can hold stops lid-close sleep; only the system's sleep-disabled
+        // flag does, and setting it needs an admin password. This row flips that
+        // flag through the standard authorization prompt.
+        let stayAwakeItem = NSMenuItem(title: "Stay Awake With Lid Closed", action: #selector(toggleStayAwakeLidClosed(_:)), keyEquivalent: "")
+        stayAwakeItem.target = self
+        stayAwakeItem.state = systemSleepDisabled() ? .on : .off
+        settingsMenu.addItem(stayAwakeItem)
+
         let autoUpdateItem = NSMenuItem(title: "Check for Updates Automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
         autoUpdateItem.target = self
         autoUpdateItem.state = UpdateChecker.shared.autoCheckEnabled ? .on : .off
@@ -1902,6 +1912,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // for the next mirror setup or wake.
         if newValue {
             applyPrimaryDisplayPreference()
+        }
+        rebuildMenu()
+    }
+
+    /// Read the system sleep-disabled flag (`pmset -g` reports it as `SleepDisabled 1`).
+    func systemSleepDisabled() -> Bool {
+        let task = Process()
+        task.launchPath = "/usr/bin/pmset"
+        task.arguments = ["-g"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do { try task.run() } catch { return false }
+        task.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        for line in output.split(separator: "\n") where line.contains("SleepDisabled") {
+            return line.trimmingCharacters(in: .whitespaces).hasSuffix("1")
+        }
+        return false
+    }
+
+    /// Flip the system sleep-disabled flag. Runs `pmset disablesleep` through the
+    /// standard admin authorization prompt; cancelling the prompt leaves the flag as is.
+    @objc func toggleStayAwakeLidClosed(_ sender: NSMenuItem) {
+        let newValue = !systemSleepDisabled()
+        let script = "do shell script \"/usr/bin/pmset disablesleep \(newValue ? 1 : 0)\" with administrator privileges"
+        var error: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        if let error = error {
+            debugLog("Stay awake with lid closed: not changed (\(error[NSAppleScript.errorMessage] ?? "cancelled"))")
+        } else {
+            debugLog("Stay awake with lid closed: \(newValue)")
         }
         rebuildMenu()
     }
