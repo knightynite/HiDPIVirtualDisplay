@@ -1256,16 +1256,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // With Adaptive Sync enabled in the monitor's OSD, macOS takes the
-        // hardware-mirror target out of the online display list entirely while
-        // our mirror is active. The mirror relationship is still queryable on
-        // the offline display, so check it before concluding the monitor was
-        // unplugged — otherwise every display-change notification reads as a
-        // disconnect and tears down a healthy setup.
-        if boundPanelHasAdaptiveSync && currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+        // macOS can take the hardware-mirror target out of the online display
+        // list entirely while our mirror is active — most visibly on panels
+        // with Adaptive Sync enabled, but the same "deep" hardware mirror has
+        // been observed with Adaptive Sync OFF in the monitor's OSD (G95NC on
+        // a base M4 MacBook Pro). The mirror relationship is still queryable
+        // on the offline display, so check it before concluding the monitor
+        // was unplugged — otherwise every display-change notification reads as
+        // a disconnect and tears down a healthy setup.
+        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
            CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
             if verbose {
-                debugLog("Monitor \(targetExternalDisplayID) is offline but still mirrors our virtual display (Adaptive Sync hardware mirror) — treating as connected")
+                debugLog("Monitor \(targetExternalDisplayID) is offline but still mirrors our virtual display (hardware mirror) — treating as connected")
             }
             return targetExternalDisplayID
         }
@@ -2535,11 +2537,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return best.id
         }
 
-        // Same Adaptive Sync fallback as findRealPhysicalMonitor: the active
+        // Same offline-mirror fallback as findRealPhysicalMonitor: the active
         // hardware-mirror target is offline (not enumerated) but still ours.
-        if boundPanelHasAdaptiveSync && currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+        // This occurs on non-Adaptive Sync panels too, so don't gate on it.
+        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
            CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
-            debugLog("  -> Mirror target \(targetExternalDisplayID) offline but mirror intact (Adaptive Sync) — using it")
+            debugLog("  -> Mirror target \(targetExternalDisplayID) offline but mirror intact — using it")
             return targetExternalDisplayID
         }
 
@@ -2579,10 +2582,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
 
-        // An offline-but-mirrored target (Adaptive Sync hardware mirror) can't
-        // be fingerprinted from the online list, but it IS the monitor the
-        // preset was applied to — we set the mirror up on it.
-        if boundPanelHasAdaptiveSync && currentVirtualID != 0 && targetExternalDisplayID != 0 &&
+        // An offline-but-mirrored target (hardware mirror — seen on panels
+        // both with and without Adaptive Sync) can't be fingerprinted from
+        // the online list, but it IS the monitor the preset was applied to —
+        // we set the mirror up on it.
+        if currentVirtualID != 0 && targetExternalDisplayID != 0 &&
            CGDisplayMirrorsDisplay(targetExternalDisplayID) == currentVirtualID {
             return true
         }
