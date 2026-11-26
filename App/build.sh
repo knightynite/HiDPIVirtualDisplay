@@ -25,7 +25,7 @@ mkdir -p "${RESOURCES}"
 # Build a universal binary (arm64 + x86_64) so the app runs on both Apple
 # Silicon and Intel Macs. Each arch is compiled and linked separately, then
 # combined with lipo. Deployment target matches LSMinimumSystemVersion (12.0).
-ARCHS="arm64 x86_64"
+ARCHS="${ARCHS:-arm64 x86_64}"
 DEPLOY_TARGET="12.0"
 SLICES=""
 
